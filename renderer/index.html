@@ -13,6 +13,47 @@
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".35"/><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".6"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/></svg>
       <span>Soundfield</span>
     </div>
+    <div class="tabs" id="tabs" role="tablist">
+      <button data-mode="library" class="on" role="tab" title="Your linked sound libraries">Library</button>
+      <button data-mode="online" role="tab" title="Search free sound effects you can legally use in anything">Online</button>
+    </div>
+    <div id="online-bar" hidden>
+      <div class="search">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input id="o-search" type="search" placeholder="Search free sound effects, then press Enter…  e.g.  bees" spellcheck="false" autocomplete="off">
+        <span id="o-count"></span>
+      </div>
+      <div class="dd" id="dd-src">
+        <button class="dd-btn" id="dd-src-btn" aria-haspopup="true" aria-expanded="false" title="Which sites to search inside Soundfield">
+          <span class="dd-label">Sources</span>
+          <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="dd-menu" id="dd-src-menu" hidden>
+          <label><input type="checkbox" value="freesound" checked><span>Freesound</span><small>600k+ sounds</small></label>
+          <label><input type="checkbox" value="commons" checked><span>Wikimedia Commons</span><small>field recordings, archives</small></label>
+          <label><input type="checkbox" value="archive" checked><span>Internet Archive</span><small>field recordings, packs</small></label>
+        </div>
+      </div>
+      <div class="dd" id="dd-ftype">
+        <button class="dd-btn" id="dd-ftype-btn" aria-haspopup="true" aria-expanded="false" title="Only show these file types">
+          <span class="dd-label">File type</span>
+          <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="dd-menu" id="dd-ftype-menu" hidden>
+          <label><input type="checkbox" value="wav" checked><span>WAV</span><small>uncompressed</small></label>
+          <label><input type="checkbox" value="aiff" checked><span>AIFF</span><small>uncompressed</small></label>
+          <label><input type="checkbox" value="flac" checked><span>FLAC</span><small>lossless</small></label>
+          <label><input type="checkbox" value="mp3" checked><span>MP3</span><small>compressed</small></label>
+          <label><input type="checkbox" value="ogg" checked><span>OGG</span><small>compressed</small></label>
+          <div class="dd-foot"><button data-act="all">Select all</button><button data-act="lossless">Lossless only</button></div>
+        </div>
+      </div>
+      <span id="o-lic-note" title="Only CC0 and public-domain sounds are shown: use them in anything, including paid work, change them, no credit needed.">No credit needed · CC0 &amp; public domain</span>
+      <button id="o-settings" class="view-toggle" title="Freesound API key and account (for original WAV files)">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        <span>Freesound</span>
+      </button>
+    </div>
     <div class="search">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       <input id="search" type="search" placeholder="Search sounds…  e.g.  door wood -creak" spellcheck="false" autocomplete="off">
@@ -81,6 +122,8 @@
       <div class="side-item" data-scope="fav"><span class="ico">★</span><span class="lbl">Favorites</span><span class="num" id="n-fav"></span></div>
       <div class="side-item" data-scope="dups" title="Find files with identical audio (click again to re-check)"><span class="ico">⧉</span><span class="lbl">Duplicates</span><span class="num" id="n-dup"></span></div>
     </div>
+    <div class="side-title collapsible" id="proj-title" title="Click to collapse / expand. Projects hold references to sounds; nothing is moved or copied."><span class="st-l"><span class="chev">▾</span>Projects</span><button id="add-proj" class="icon-btn" title="New project">+</button></div>
+    <div class="side-section projects" id="projects"></div>
     <div class="side-title collapsible" id="types-title" title="Click to collapse / expand · In the list: click a category to filter, Ctrl-click to combine"><span class="st-l"><span class="chev">▾</span>Categories</span></div>
     <div class="side-section types" id="types"></div>
     <div id="side-split" title="Drag to resize · Double-click to reset"></div>
@@ -105,6 +148,7 @@
     </div>
     <div id="dup-banner" hidden></div>
     <div id="dup-excluded" hidden></div>
+    <div id="proj-banner" hidden></div>
     <div id="list"></div>
     <div id="dup-chooser" hidden>
       <div class="dup-card">
@@ -123,6 +167,38 @@
           </button>
         </div>
         <p class="dup-tip">Tip: right-click a folder under Libraries → <i>Exclude from duplicate search</i> to leave it out.</p>
+      </div>
+    </div>
+    <div id="online" hidden>
+      <div id="o-modes">
+        <div class="seg" role="tablist">
+          <button data-omode="sf" class="on" role="tab">Soundfield search</button>
+          <button data-omode="web" role="tab">Website search</button>
+        </div>
+        <span id="o-mode-hint"></span>
+        <div id="o-dest" title="Where Save puts sounds this session. Click to change it at any time.">
+          <span>Save to</span>
+          <button id="o-dest-btn"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" fill="none" stroke="currentColor" stroke-width="1.9"/></svg><b id="o-dest-name">Soundfield Downloads</b><svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+      </div>
+      <div id="o-web" hidden></div>
+      <div id="o-status" hidden></div>
+      <div id="o-header" class="row header">
+        <div class="c-name" data-sort="title">Name</div>
+        <div class="c-src" data-sort="sourceLabel">Source</div>
+        <div class="c-lic" data-sort="license">Licence</div>
+        <div class="c-dur" data-sort="duration">Length</div>
+        <div class="c-ofmt" data-sort="ext">Format</div>
+        <div class="c-by" data-sort="creator">By</div>
+        <div class="c-act"></div>
+      </div>
+      <div id="o-list"></div>
+      <div id="o-empty">
+        <div class="empty-card">
+          <div class="empty-ring"></div>
+          <h2>Find free sound effects</h2>
+          <p>Search Freesound and Wikimedia Commons for attribution-free sounds (CC0 and public domain): use them in anything, including paid work, with no credit needed. <b>Save</b> puts the sound in <i>Documents\Soundfield Downloads</i> and notes where it came from in <i>Credits.txt</i>.</p>
+        </div>
       </div>
     </div>
     <div id="empty" hidden>
@@ -200,6 +276,7 @@
   </section>
 </div>
 <div id="toast"></div>
+<div id="modal" hidden></div>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

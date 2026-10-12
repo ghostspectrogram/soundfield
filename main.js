@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, protocol, shell, nativeImage, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, shell, nativeImage, Menu, clipboard, net, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -9,11 +9,25 @@ const { probe } = require('./lib/probe');
 const { writeRegionSync } = require('./lib/region');
 const { extractZip } = require('./lib/zip');
 const store = require('./lib/store');
+const online = require('./lib/online');
 
 if (process.env.SF_USERDATA) app.setPath('userData', process.env.SF_USERDATA);
 // Our own taskbar identity (so Windows shows the Soundfield icon, not Electron's).
 if (process.platform === 'win32') app.setAppUserModelId('com.soundfield.app');
 const DEBUG = !!process.env.SF_DEBUG;
+
+// One Soundfield at a time: two copies would fight over the same library files.
+// Opening it again just brings the existing window to the front.
+if (!process.env.SF_SNAPSHOT && !app.requestSingleInstanceLock()) {
+  app.exit(0);
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -93,7 +107,8 @@ const scanQueue = [];
 let scanning = null;
 
 function queueScan(id) {
-  if ((scanning && scanning.id === id) || scanQueue.includes(id)) return;
+  if (scanning && scanning.id === id) { scanning.again = true; return; } // rescan once this one finishes
+  if (scanQueue.includes(id)) return;
   scanQueue.push(id);
   pumpScans();
 }
@@ -107,7 +122,13 @@ function pumpScans() {
   send('scan:progress', { id, phase: 'start', done: 0, total: 0 });
   const prev = store.index(id);
   const w = new Worker(path.join(__dirname, 'lib', 'scan-worker.js'), { workerData: { root: lib.path, prev } });
-  const finish = () => { scanning = null; send('scan:progress', { id, phase: 'end' }); pumpScans(); };
+  const finish = () => {
+    const again = scanning && scanning.again;
+    scanning = null;
+    send('scan:progress', { id, phase: 'end' });
+    if (again && libraries.includes(lib)) scanQueue.unshift(id);
+    pumpScans();
+  };
   w.on('message', m => {
     if (m.type === 'progress') send('scan:progress', { id, phase: m.phase, done: m.done, total: m.total });
     else if (m.type === 'offline') {
@@ -266,7 +287,76 @@ function registerIpc() {
     for (const l of libraries) records[l.id] = store.index(l.id);
     const analysis = {};
     for (const l of libraries) analysis[l.id] = analysisForRenderer(l.id);
-    return { libs, records, analysis, typeOverrides, favorites: [...favorites], overrides, sep: path.sep, platform: process.platform };
+    return { libs, records, analysis, typeOverrides, projects: store.projects(), downloads: store.downloads(), favorites: [...favorites], overrides, sep: path.sep, platform: process.platform };
+  });
+
+  // ---------------------------------------------------------------- projects
+  // A project is a list of references to sounds; it never moves files.
+  ipcMain.handle('proj:save', (e, list) => { store.saveProjects(list); return true; });
+
+  // Zip a project into one file, or "materialize" it as a real folder of copies.
+  ipcMain.handle('proj:export', async (e, req) => {
+    const { mode, name, items, layout, manifest, repoint } = req;
+    const safe = (name || 'Project').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || 'Project';
+    let dest;
+    if (mode === 'zip') {
+      const r = await dialog.showSaveDialog(win, {
+        title: `Zip “${name}”`,
+        defaultPath: path.join(app.getPath('documents'), safe + '.zip'),
+        filters: [{ name: 'Zip archive', extensions: ['zip'] }],
+      });
+      if (r.canceled || !r.filePath) return null;
+      dest = r.filePath;
+    } else {
+      const r = await dialog.showOpenDialog(win, {
+        title: `Choose where to create the “${safe}” folder`,
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (r.canceled || !r.filePaths.length) return null;
+      dest = path.join(r.filePaths[0], safe);
+      for (let n = 2; fs.existsSync(dest); n++) dest = path.join(r.filePaths[0], `${safe} (${n})`);
+    }
+    const result = await new Promise((resolve, reject) => {
+      const w = new Worker(path.join(__dirname, 'lib', 'export-worker.js'), {
+        workerData: { mode, items, dest, layout: layout === 'keep' ? 'keep' : 'flat', manifest: manifest !== false, projectName: name },
+      });
+      w.on('message', m => {
+        if (m.type === 'progress') send('export:progress', { ...m, mode, name });
+        else if (m.type === 'done') resolve(m);
+        else if (m.type === 'error') reject(new Error(m.message));
+      });
+      w.on('error', reject);
+      w.on('exit', code => { if (code) reject(new Error('Export stopped unexpectedly')); });
+    }).finally(() => send('export:progress', { finished: true }));
+
+    // Optionally make the copies the project's sounds: their folder must be a library to be listed.
+    if (mode === 'copy' && repoint && result.copies.length) {
+      const low = dest.toLowerCase();
+      const covered = libraries.some(l => { const p = path.resolve(l.path).toLowerCase(); return low === p || low.startsWith(p.endsWith(path.sep) ? p : p + path.sep); });
+      if (!covered) {
+        const lib = { id: crypto.randomBytes(6).toString('hex'), name: path.basename(dest), path: dest, count: 0, addedAt: Date.now() };
+        libraries.push(lib);
+        saveLibs();
+        result.newLibrary = libPublic(lib);
+      }
+      for (const l of libraries) if (dest.toLowerCase().startsWith(path.resolve(l.path).toLowerCase())) queueScan(l.id);
+    }
+
+    const what = mode === 'zip' ? `Zipped ${result.count} sound${result.count === 1 ? '' : 's'}` : `Copied ${result.count} sound${result.count === 1 ? '' : 's'}`;
+    const miss = result.missing.length;
+    const r = await dialog.showMessageBox(win, {
+      type: miss ? 'warning' : 'info',
+      buttons: ['Show in Explorer', 'OK'],
+      defaultId: 0,
+      cancelId: 1,
+      title: name,
+      message: `${what} from “${name}”${mode === 'zip' ? ' into one zip' : ' into a new folder'}.`,
+      detail: `${dest}` + (miss
+        ? `\n\n${miss} file${miss === 1 ? ' was' : 's were'} skipped (missing or unreadable):\n` + result.missing.slice(0, 12).map(p => '  ' + p).join('\n') + (miss > 12 ? `\n  …and ${miss - 12} more` : '')
+        : '') + (result.newLibrary ? `\n\nThe new folder was added as a library, and the project now points at the copies.` : ''),
+    });
+    if (r.response === 0) { if (mode === 'zip') shell.showItemInFolder(dest); else shell.openPath(dest); }
+    return result;
   });
 
   ipcMain.handle('type:set', (e, paths, type) => {
@@ -354,6 +444,12 @@ function registerIpc() {
   });
 
   ipcMain.handle('file:reveal', (e, p) => { shell.showItemInFolder(p); return true; });
+  // A materialized folder opens in Explorer; a zip is shown selected in its folder.
+  ipcMain.handle('file:showExport', async (e, p, isFile) => {
+    if (typeof p !== 'string' || !fs.existsSync(p)) return false;
+    if (isFile) shell.showItemInFolder(p); else await shell.openPath(p);
+    return true;
+  });
 
   ipcMain.handle('dupes:find', () => {
     if (dupesWorker) dupesWorker.terminate();
@@ -454,6 +550,236 @@ function registerIpc() {
   });
 }
 
+// ------------------------------------------------------------------ online search
+// Secrets (Freesound key and account tokens) are encrypted with Windows' user key.
+function seal(s) { return s ? (safeStorage.isEncryptionAvailable() ? 'enc:' + safeStorage.encryptString(s).toString('base64') : s) : ''; }
+function unseal(s) {
+  if (!s) return '';
+  if (!s.startsWith('enc:')) return s;
+  try { return safeStorage.decryptString(Buffer.from(s.slice(4), 'base64')); } catch { return ''; }
+}
+
+const downloadsDir = () => process.env.SF_DOWNLOADS || path.join(app.getPath('documents'), 'Soundfield Downloads');
+const previewDir = () => path.join(app.getPath('userData'), 'online-cache');
+const FS_CALLBACK = 'https://freesound.org/home/app_permissions/permission_granted/';
+
+function onlineSettings() {
+  const o = store.online();
+  return { apiKey: unseal(o.fsKey), clientId: o.fsClientId || '', token: unseal(o.fsToken), refresh: unseal(o.fsRefresh), expires: o.fsExpires || 0, user: o.fsUser || '' };
+}
+function saveOnlineSettings(s) {
+  store.saveOnline({ fsKey: seal(s.apiKey), fsClientId: s.clientId, fsToken: seal(s.token), fsRefresh: seal(s.refresh), fsExpires: s.expires, fsUser: s.user });
+}
+function publicOnline(s = onlineSettings()) {
+  return { hasKey: !!s.apiKey, keyHint: s.apiKey ? '••••' + s.apiKey.slice(-4) : '', clientId: s.clientId, connected: !!s.refresh, user: s.user, callback: FS_CALLBACK };
+}
+
+async function freesoundToken(grant) {
+  const s = onlineSettings();
+  const body = new URLSearchParams({ client_id: s.clientId, client_secret: s.apiKey, ...grant });
+  const r = await net.fetch(`${online.FS_API}/oauth2/access_token/`, {
+    method: 'POST', body: body.toString(),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': online.UA },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) throw new Error(j.error_description || j.error || j.detail || `Freesound said no (HTTP ${r.status})`);
+  Object.assign(s, { token: j.access_token, refresh: j.refresh_token || s.refresh, expires: Date.now() + (j.expires_in || 86000) * 1000 });
+  try {
+    const me = await net.fetch(`${online.FS_API}/me/`, { headers: { Authorization: `Bearer ${s.token}`, 'User-Agent': online.UA } });
+    if (me.ok) s.user = (await me.json()).username || s.user;
+  } catch {}
+  saveOnlineSettings(s);
+  return s;
+}
+
+// A valid account token for original-file downloads, refreshed when it's about to expire.
+async function freesoundBearer() {
+  let s = onlineSettings();
+  if (!s.refresh || !s.apiKey || !s.clientId) return '';
+  if (!s.token || s.expires < Date.now() + 60000) {
+    try { s = await freesoundToken({ grant_type: 'refresh_token', refresh_token: s.refresh }); }
+    catch (err) { console.error('freesound refresh', err.message); return ''; }
+  }
+  return s.token;
+}
+
+function prunePreviews() {
+  try {
+    const dir = previewDir();
+    const files = fs.readdirSync(dir).map(f => { const p = path.join(dir, f); return { p, t: fs.statSync(p).mtimeMs }; }).sort((a, b) => b.t - a.t);
+    for (const f of files.slice(300)) fs.unlinkSync(f.p);
+  } catch {}
+}
+
+const previewFile = r => {
+  const ext = (r.previewExt || 'mp3').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'mp3';
+  return path.join(previewDir(), `${String(r.key).replace(/[^a-z0-9]+/gi, '-')}.${ext}`);
+};
+// Freesound HQ previews run at roughly 128–190 kbps; over-estimating only adds an empty range.
+const previewSizeHint = r => (r.source === 'freesound' ? Math.max(64 * 1024, Math.ceil((r.duration || 0) * 24000))
+  : r.previewSize > 512 * 1024 ? r.previewSize : 0); // exact size known (Internet Archive): only worth splitting when big
+
+const previewJobs = new Map(); // file -> Promise
+function fetchPreview(r) {
+  const file = previewFile(r);
+  if (fs.existsSync(file)) return Promise.resolve(file);
+  if (previewJobs.has(file)) return previewJobs.get(file);
+  if (!/^https:\/\//.test(r.previewUrl || '')) return Promise.reject(new Error('No preview available'));
+  let last = 0;
+  const progress = (got, total) => {
+    if (Date.now() - last < 120) return;
+    last = Date.now();
+    send('preview:progress', { key: r.key, got, total });
+  };
+  const hint = previewSizeHint(r);
+  const job = (hint ? online.downloadRanges(r.previewUrl, file, hint, progress) : online.download(r.previewUrl, file, {}, progress))
+    .then(() => { prunePreviews(); return file; })
+    .finally(() => previewJobs.delete(file));
+  previewJobs.set(file, job);
+  return job;
+}
+
+function registerOnlineIpc() {
+  ipcMain.handle('online:search', (e, req) => online.search(req, onlineSettings()));
+
+  // Previews are cached in the app's own folder (not your libraries) so the player can show them.
+  // Requests for the same preview (a click while it's being pre-loaded) share one download.
+  ipcMain.handle('online:preview', (e, r) => fetchPreview(r));
+
+  // Saves a sound into the session's save folder (default: Documents\Soundfield Downloads\<Source>),
+  // records where it came from in that folder's Credits.txt, and makes sure the folder is
+  // part of a library so it shows up in your sounds.
+  ipcMain.handle('online:download', async (e, r, saveDir) => {
+    const custom = typeof saveDir === 'string' && saveDir && path.isAbsolute(saveDir) ? path.resolve(saveDir) : null;
+    const root = custom || downloadsDir();
+    const dir = custom || path.join(root, online.safeName(r.sourceLabel));
+    const downloads = store.downloads();
+    const known = downloads[r.key];
+    // Already saved in this folder: nothing to do. Saved somewhere else: save another copy here.
+    if (known && fs.existsSync(known.path) && path.dirname(known.path).toLowerCase() === dir.toLowerCase()) return { ...known, already: true };
+    let url = r.previewUrl, ext = r.previewExt || 'mp3', headers = {}, quality = 'preview';
+    if (r.source === 'commons') { quality = 'original'; ext = r.ext; }
+    else if (r.downloadUrl) { url = r.downloadUrl; quality = 'original'; ext = r.ext; } // Internet Archive original file
+    else if (r.source === 'freesound' && r.original) {
+      const bearer = await freesoundBearer();
+      if (bearer) { url = `${online.FS_API}/sounds/${encodeURIComponent(r.id)}/download/`; headers = { Authorization: `Bearer ${bearer}` }; ext = r.ext || 'wav'; quality = 'original'; }
+    }
+    if (!/^https:\/\//.test(url || '')) throw new Error('This sound has no downloadable file');
+    ext = ext === 'aiff' ? 'aif' : ext.replace(/[^a-z0-9]/gi, '').slice(0, 5);
+    const base = online.safeName(r.title) + (quality === 'preview' ? ' (preview)' : '');
+    const dest = online.uniquePath(dir, base, ext);
+    send('online:progress', { key: r.key, got: 0, total: r.size || 0 });
+    let last = 0;
+    try {
+      if (quality === 'preview') {
+        // Same file as the preview you just listened to: reuse it instead of downloading again.
+        const cached = await fetchPreview(r);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.copyFileSync(cached, dest);
+      } else {
+        await online.download(url, dest, headers, (got, total) => {
+          if (Date.now() - last > 150) { last = Date.now(); send('online:progress', { key: r.key, got, total: total || r.size || 0 }); }
+        });
+      }
+    } finally { send('online:progress', { key: r.key, finished: true }); }
+
+    const lic = online.LICENSES[r.license] || { name: r.license, credit: true };
+    const entry = {
+      path: dest, source: r.source, sourceLabel: r.sourceLabel, title: r.title, creator: r.creator, pageUrl: r.pageUrl,
+      license: r.license, licenseLabel: lic.label || r.license, licenseUrl: r.licenseUrl || '', credit: lic.credit, quality, at: Date.now(),
+    };
+    downloads[r.key] = entry;
+    store.saveDownloads(downloads);
+    const line = `${path.relative(root, dest)}\r\n    ${online.attributionText(r)}\r\n    ${lic.credit ? 'Credit required: include the line above in your credits.' : 'No credit required (you may still credit the creator).'}\r\n\r\n`;
+    const credits = path.join(root, 'Credits.txt');
+    if (!fs.existsSync(credits)) fs.writeFileSync(credits, '﻿Sounds downloaded with Soundfield, with their licences.\r\nKeep this file: it is your record of where each sound came from.\r\n\r\n');
+    fs.appendFileSync(credits, line);
+
+    const low = root.toLowerCase();
+    let lib = libraries.find(l => { const p = path.resolve(l.path).toLowerCase(); return low === p || low.startsWith(p.endsWith(path.sep) ? p : p + path.sep); });
+    if (!lib) {
+      lib = { id: crypto.randomBytes(6).toString('hex'), name: custom ? path.basename(root) || root : 'Online downloads', path: root, count: 0, addedAt: Date.now() };
+      libraries.push(lib);
+      saveLibs();
+    }
+    queueScan(lib.id);
+    return entry;
+  });
+
+  ipcMain.handle('online:downloads', () => store.downloads());
+  ipcMain.handle('online:defaultDir', () => downloadsDir());
+  ipcMain.handle('online:pickFolder', async (e, current) => {
+    const r = await dialog.showOpenDialog(win, {
+      title: 'Save Soundfield search downloads to…',
+      defaultPath: typeof current === 'string' && current ? current : downloadsDir(),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
+  });
+  ipcMain.handle('file:exists', (e, p) => typeof p === 'string' && fs.existsSync(p));
+  ipcMain.handle('online:settings', () => publicOnline());
+  ipcMain.handle('online:setKey', (e, { apiKey, clientId }) => {
+    const s = onlineSettings();
+    if (typeof apiKey === 'string') { const k = apiKey.trim(); if (k !== s.apiKey) Object.assign(s, { apiKey: k, token: '', refresh: '', expires: 0, user: '' }); }
+    if (typeof clientId === 'string') s.clientId = clientId.trim();
+    saveOnlineSettings(s);
+    return publicOnline(s);
+  });
+  // Signs in to Freesound in a small window of our own and picks the authorization code
+  // out of Freesound's redirect, whatever callback URL the key was registered with.
+  // Resolves the new settings, or null if the window was closed.
+  let authWin = null;
+  ipcMain.handle('online:connect', () => {
+    const s = onlineSettings();
+    if (!s.clientId || !s.apiKey) throw new Error('Enter your Freesound Client ID and API key first');
+    if (authWin && !authWin.isDestroyed()) { authWin.focus(); return null; }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (fn, v) => { if (settled) return; settled = true; fn(v); if (authWin && !authWin.isDestroyed()) authWin.close(); };
+      authWin = new BrowserWindow({
+        parent: win, width: 560, height: 760, title: 'Connect Freesound', autoHideMenuBar: true,
+        backgroundColor: '#ffffff', icon: path.join(__dirname, 'build', 'icon.ico'),
+        webPreferences: { partition: 'persist:freesound', sandbox: true, contextIsolation: true, nodeIntegration: false },
+      });
+      const wc = authWin.webContents;
+      const check = (e, url) => {
+        let u;
+        try { u = new URL(url); } catch { return; }
+        const code = u.searchParams.get('code'), err = u.searchParams.get('error');
+        if ((!code && !err) || u.pathname.startsWith('/apiv2/oauth2/')) return; // not the redirect yet
+        if (e && e.preventDefault) e.preventDefault();
+        if (err) { finish(reject, new Error(err === 'access_denied' ? 'Access was denied on Freesound' : err)); return; }
+        freesoundToken({ grant_type: 'authorization_code', code }).then(() => finish(resolve, publicOnline()), er => finish(reject, er));
+      };
+      wc.on('will-redirect', check);
+      wc.on('will-navigate', check);
+      wc.on('did-navigate', check);
+      wc.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+      authWin.on('closed', () => { authWin = null; finish(resolve, null); });
+      authWin.loadURL(`${online.FS_API}/oauth2/authorize/?client_id=${encodeURIComponent(s.clientId)}&response_type=code&state=soundfield`);
+    });
+  });
+  ipcMain.handle('online:code', async (e, text) => {
+    const m = String(text || '').match(/[?&]code=([^&\s]+)/);
+    const code = m ? decodeURIComponent(m[1]) : String(text || '').trim();
+    if (!code) throw new Error('Paste the code Freesound showed you');
+    await freesoundToken({ grant_type: 'authorization_code', code });
+    return publicOnline();
+  });
+  ipcMain.handle('online:disconnect', () => {
+    const s = onlineSettings();
+    Object.assign(s, { token: '', refresh: '', expires: 0, user: '' });
+    saveOnlineSettings(s);
+    return publicOnline(s);
+  });
+  // Only web links, opened in the default browser.
+  ipcMain.handle('open:external', (e, url) => {
+    if (!/^https:\/\//i.test(String(url))) return false;
+    shell.openExternal(url);
+    return true;
+  });
+}
+
 // ------------------------------------------------------------------ boot
 app.whenReady().then(async () => {
   ({ ANALYSIS_VERSION: analysisVersion } = await import(require('url').pathToFileURL(path.join(__dirname, 'shared', 'categorize.mjs')).href));
@@ -478,6 +804,7 @@ app.whenReady().then(async () => {
   });
 
   registerIpc();
+  registerOnlineIpc();
   createWindow();
 
   // Quietly pick up added / changed / removed files after the UI is up.

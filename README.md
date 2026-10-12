@@ -16,6 +16,9 @@ npm start
 
 If `npm start` says Electron failed to install, newer npm versions sometimes skip Electron's download step. Run `node node_modules/electron/install.js` once, then `npm start` again.
 
+### Standalone app (Windows)
+`npm run build` packages `Soundfield.exe` into `dist/`, installs it to `%LOCALAPPDATA%\Programs\Soundfield`, and points the Start menu shortcut at it. Close Soundfield before rebuilding (Windows locks a running exe), or use `npm run build -- --wait` to install as soon as it closes. Libraries, projects and settings live in `%APPDATA%\Soundfield`, so they carry over between builds. `npm run build -- --no-install` only packages.
+
 The app icon lives in `build/icon.ico` / `build/icon.png`. It's drawn by `tools/make-icon.js`; run `npm run icon` to regenerate it after tweaking the design.
 
 ## Project layout
@@ -75,6 +78,34 @@ No license has been granted: all rights reserved. You're welcome to read the cod
 - On launch, libraries quietly rescan in the background. Only new or changed files are re-read.
 - Right-click a library to rescan it, remove it (your files stay untouched), or set how its 4-channel files should be read (Quad, AmbiX, or FuMa).
 - Zips that contain audio are listed. Right-click one, or use the buttons in the preview panel, to **Extract here** or **Extract to "<zip name>"**. The library then rescans automatically.
+
+## Projects
+Virtual project folders: a project holds *references* to sounds. Nothing is moved or copied, and one sound can be in any number of projects.
+- **Create:** click **+** next to *Projects* in the sidebar.
+- **Add sounds:** right-click → *Add to project ▸*; drag sounds from the list onto a project; press **P** to add the sound you're previewing to the project you used last; or right-click a project → *Add all listed sounds* (handy after a search or filter).
+- **Open:** click a project to list its sounds. Sounds that belong to a project show a ▣ badge elsewhere in the app.
+- **Missing files:** if an original is moved, renamed or deleted, it shows as **missing**. **Relink missing** finds it again in your libraries by name and size.
+- **Zip…** packs the project into one .zip in the background. Audio is stored uncompressed (fast; sound files barely compress), same-named files become `name (2).wav`, missing files are skipped and listed in a report, and a list of original locations can be included.
+- **Materialize…** copies the project into a real folder named after it, and verifies each copy. Originals are never moved or deleted. You can choose all-in-one-folder or keep library folders, and optionally point the project at the new copies (the new folder is then added as a library).
+- **Manage:** right-click a project to rename, relink or delete it. Deleting a project never touches the sounds.
+- **Finding exports again:** Soundfield remembers where each project was materialized or zipped. Right-click the project → *Show materialized folder in Explorer* (or *Show zip in Explorer*), or use **Show exports ▾** in the project's banner. *All exports* lists earlier ones.
+
+## Online
+Click **Online** (next to *Library* at the top). It has two modes, switched under the search bar:
+- **Soundfield search** shows only sounds you can preview and save straight into Soundfield, and only attribution-free ones (CC0 and public domain) that you can use in anything, including paid and commercial work, with no credit needed.
+- **Website search** lists sound sites, grouped as free, subscription and not-for-commercial-work, each with a badge for its terms. Clicking one opens your search on that site in your browser (signed in as you).
+
+### Soundfield search
+- **Sources:** Freesound, Wikimedia Commons and Internet Archive, through their official search APIs (pick them under **Sources ▾**). Type a search and press **Enter**; more results load as you scroll. Internet Archive results are mostly long field recordings and soundscapes (e.g. Radio Aporee) plus some sound packs. A pack's files are listed individually, with the pack name shown in the player. Its licences are what each uploader declared; only CC0 / public-domain uploads are shown.
+- **Licences:** only CC0 and public-domain sounds are shown. Sounds that need credit (CC BY), share-alike, non-commercial or no-derivatives sounds are never shown.
+- **File type:** the *File type* menu limits results to WAV, AIFF, FLAC, MP3 and/or OGG (*Lossless only* = WAV, AIFF, FLAC). It applies to the original file; without a connected Freesound account, Freesound saves are MP3 previews. Click a column header (e.g. *Format*) to sort the results.
+- **Preview:** click a result to see its waveform; double-click (or Enter) to play. Previews are cached in the app's own folder, not your libraries.
+- **Save** (or `S`, or right-click → *Save*) downloads it to `Documents\Soundfield Downloads\<Source>`, which is added as the *Online downloads* library. Each save is recorded in `Credits.txt` there, with the creator, link and licence, so you always know where a sound came from. *Copy credit line* copies that line for one sound. Dragging a result to your DAW saves it first.
+- **Save to:** the **Save to** button (right of the mode switch) shows where **Save** puts sounds this session, and you can change it at any time: *Choose folder…*, a recent folder, or back to *Soundfield Downloads (default)*. You can also right-click any folder under Libraries → *Save Soundfield search downloads here*. Sounds go straight into the chosen folder, with its own `Credits.txt`, and the folder is added as a library if it isn't in one already. Each launch starts at the default again. Saving a sound you already saved elsewhere makes another copy in the current folder.
+- **Freesound key and account (free):** click **Freesound** in the top bar. Without a key, Freesound is searched through Openverse (an older index, about 200 searches a day). With a free API key, search uses Freesound directly. Connecting your Freesound account as well makes **Save** download the original WAV / AIFF / FLAC instead of the MP3 preview. The key and account tokens are stored encrypted with your Windows account.
+
+### Website search
+Sites that don't let other apps search them: Freesound and Wikimedia Commons (their full catalogues, every licence), Pixabay, Mixkit, Zapsplat, Uppbeat, SoundBible, Sound Gator, 99Sounds, the Sonniss GDC bundles, Epidemic Sound, Artlist, Envato Elements, Storyblocks, Soundsnap and BBC Sound Effects. Type a search, then click a site to open it there. Hover a site for its licence terms. BBC Sound Effects are for personal / educational use only. Sounds you download from these sites can be linked as a library like any other folder.
 
 ## Sidebar
 - **Resize:** drag the bar just above **Libraries** up or down to make Categories shorter or taller. Double-click the bar to reset.

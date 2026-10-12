@@ -2,6 +2,7 @@ import { Engine } from './engine.js';
 import { WaveView, fmtTime, escapeHtml } from './waveform.js';
 import { SpeakerView } from './speakers.js';
 import { VList } from './vlist.js';
+import { createOnline } from './online.js';
 import { createSource } from './sources.js';
 import { detectLayout, layoutChoices } from './layouts.js';
 import { metaCategory, TYPES, TYPE_LABELS } from '../../shared/categorize.mjs';
@@ -49,6 +50,13 @@ const S = {
   typeOverrides: {}, // path -> type set by the user
   types: new Set(), // active type filters
   analyzing: new Map(), // libId -> { done, total }
+  projects: [], // [{ id, name, created, items: [{ path, size, mtime }] }]
+  projIndex: new Map(), // lower-case path -> [projects]
+  mode: 'library', // 'library' | 'online'
+  downloads: {}, // online key -> { path, licence, creator, … } for sounds saved from the Online tab
+  downloadsByPath: new Map(),
+  onlineTok: 0,
+  saveDir: null, // Soundfield search save folder for this session (null = Documents\Soundfield Downloads)
 };
 
 const engine = new Engine();
@@ -196,6 +204,7 @@ function applyFilters({ keepScroll = false } = {}) {
   for (const it of S.items) {
     if (sc.type === 'fav' && !S.favorites.has(it.path)) continue;
     if (sc.type === 'dups' && (S.dupChooser || !(S.dupes && S.dupes.byPath.has(it.path)))) continue;
+    if (sc.type === 'proj' && !(S.projIndex.get(lowPath(it.path)) || []).some(p => p.id === sc.id)) continue;
     if (sc.type === 'folder') {
       if (it.lib.id !== sc.lib) continue;
       if (sc.prefix && it.folder !== sc.prefix && !it.folder.startsWith(sc.prefix + '/')) continue;
@@ -218,10 +227,22 @@ function applyFilters({ keepScroll = false } = {}) {
     const bp = S.dupes.byPath;
     out.sort((a, b) => bp.get(a.path).g - bp.get(b.path).g || collator.compare(a.path, b.path));
   } else sortItems(out);
+  // A project also lists the sounds it can no longer find, so they can be relinked or removed.
+  if (sc.type === 'proj') {
+    const p = projectById(sc.id);
+    if (p && !(cls.size || S.types.size || sr || S.dur)) {
+      for (const r of missingRefs(p)) {
+        const m = missingItem(r);
+        if (inc.every(t => m.hay.includes(t)) && !exc.some(t => m.hay.includes(t))) out.push(m);
+      }
+    }
+  }
   const folders = browse ? folderRows(sc) : [];
   const view = folders.length ? folders.concat(out) : out;
   S.view = view;
   renderDupBanner();
+  renderProjBanner();
+  document.querySelectorAll('.proj-row[data-id]').forEach(r => r.classList.toggle('active', sc.type === 'proj' && sc.id === r.dataset.id));
   renderCrumbs(searching);
   if (!keepScroll) $('#list').scrollTop = 0;
   list.setItems(view);
@@ -351,6 +372,25 @@ function renderFolderRow(row, it) {
   c[9].title = it.path;
 }
 
+function renderMissingRow(row, it) {
+  const c = row._c;
+  row.classList.remove('folder-row', 'dup-b', 'dup-first');
+  row.classList.add('missing-row');
+  c[0].firstChild.classList.remove('on');
+  c[1].innerHTML = `${escapeHtml(it.name)}<span class="ext">.${escapeHtml(it.ext)}</span><span class="missb">missing</span>`;
+  c[1].title = `Not found: ${it.path}\nRight-click → Relink, or use “Relink missing” above.`;
+  c[2].firstChild.className = 'fmt';
+  c[2].firstChild.textContent = '';
+  c[3].className = 'c-type';
+  c[3].textContent = '';
+  c[3].title = '';
+  for (const k of [4, 5, 6, 7]) c[k].textContent = '';
+  c[8].textContent = 'Moved, renamed or deleted since it was added';
+  c[8].title = '';
+  c[9].textContent = it.lib.path;
+  c[9].title = it.path;
+}
+
 // ------------------------------------------------------------------ list rows
 function renderRow(row, it) {
   if (!row._built) {
@@ -359,14 +399,20 @@ function renderRow(row, it) {
     row._built = true;
     row._c = [...row.children];
   }
-  if (it.isFolder) { renderFolderRow(row, it); return; }
-  row.classList.remove('folder-row');
+  if (it.isFolder) { row.classList.remove('missing-row'); renderFolderRow(row, it); return; }
+  if (it.isMissing) { renderMissingRow(row, it); return; }
+  row.classList.remove('folder-row', 'missing-row');
   const c = row._c, r = it.rec;
   c[0].firstChild.classList.toggle('on', S.favorites.has(it.path));
   const dup = S.scope.type === 'dups' && S.dupes ? S.dupes.byPath.get(it.path) : null;
   row.classList.toggle('dup-b', !!dup && dup.g % 2 === 1);
   row.classList.toggle('dup-first', !!dup && dup.first);
-  c[1].innerHTML = `${escapeHtml(it.name)}<span class="ext">.${escapeHtml(it.ext)}</span>${dup ? `<span class="dupn">${dup.n} copies</span>` : ''}`;
+  // Project badge (hidden while viewing a project: every row there belongs to it).
+  const projs = S.scope.type === 'proj' ? null : S.projIndex.get(lowPath(it.path));
+  const projTag = projs && projs.length
+    ? `<span class="projn" title="In project${projs.length > 1 ? 's' : ''}: ${escapeHtml(projs.map(p => p.name).join(', '))}">▣ ${escapeHtml(projs.length > 1 ? `${projs.length} projects` : projs[0].name)}</span>`
+    : '';
+  c[1].innerHTML = `${escapeHtml(it.name)}<span class="ext">.${escapeHtml(it.ext)}</span>${dup ? `<span class="dupn">${dup.n} copies</span>` : ''}${projTag}`;
   c[1].title = it.path;
   const f = c[2].firstChild;
   f.className = 'fmt ' + it.cls;
@@ -411,6 +457,22 @@ async function selectIndex(i, { play = prefs.autoplay, scroll = true } = {}) {
   list.select(i, scroll);
   const it = S.view[i];
   if (it.isFolder) return; // folders are opened with double-click / Enter
+  if (it.isMissing) {
+    S.current = null;
+    engine.stop();
+    S.source = null;
+    S.layout = null;
+    wave.clear('This sound has moved or been deleted. Use “Relink missing” to find it again.');
+    speakers.setLayout(null);
+    fillLayoutSelect();
+    $('#file-meta').innerHTML = `<div class="fname">${escapeHtml(it.name)}.${escapeHtml(it.ext)}</div><dl><dt>Was at</dt><dd>${escapeHtml(it.path)}</dd></dl>`;
+    return;
+  }
+  return loadItem(it, { play });
+}
+
+// Loads a sound into the player (library row, or an online result once its file is local).
+async function loadItem(it, { play = false } = {}) {
   if (S.playOnLoad && S.playOnLoad !== it) S.playOnLoad = null;
   if (S.current === it) { if (play && !engine.playing) startPlay(); return; }
   S.current = it;
@@ -542,6 +604,7 @@ wave.on('select', sel => {
 });
 wave.on('dragRegion', sel => {
   if (!S.current) return;
+  if (S.current.online) { onlineDrag(); return; }
   const pcm = S.info && (S.info.codec === 'pcm' || S.info.codec === 'float');
   api.startDrag(S.current.path, sel && pcm ? sel : null);
 });
@@ -592,10 +655,24 @@ function renderMeta() {
     if (info && info.mask) rows.push(['Mask', '0x' + info.mask.toString(16).toUpperCase()]);
     if (L && L.chans.length && !L.ambi) rows.push(['Order', L.chans.map(c => c.role === c.label ? c.role : c.label).join(' ')]);
   }
-  if (!it.zip) rows.push(['Category', TYPE_LABELS[it.type] + ({ you: ' · set by you', name: ' · from name', audio: ' · from audio' }[it.typeSrc] || '')]);
-  rows.push(['Size', fmtBytes(r.size)]);
-  rows.push(['Folder', `${it.lib.name}${it.folder ? ' / ' + it.folder : ''}`]);
-  el.innerHTML = `<div class="fname">${escapeHtml(it.name)}.${escapeHtml(it.ext)}</div>
+  // Where an online sound (or a downloaded one) came from, and what its licence asks.
+  const o = it.online || S.downloadsByPath.get(lowPath(it.path));
+  if (o) {
+    const lic = LIC_INFO[o.license] || { label: o.license, credit: true };
+    rows.push(['Licence', `${lic.label} · ${lic.credit ? 'credit the creator' : 'no credit needed'}`]);
+    rows.push(['By', o.creator || 'unknown']);
+    rows.push(['Source', o.sourceLabel]);
+    if (it.online) {
+      const dl = S.downloads[o.key];
+      rows.push(['Playing', it.path === (dl && dl.path) ? 'Your saved copy' : o.source === 'commons' || o.previewIsOriginal ? 'Original file' : 'Preview (MP3)']);
+      if (o.pack) rows.push(['Pack', o.pack]);
+    } else if (o.quality === 'preview') rows.push(['Quality', 'Preview (MP3)']);
+  } else {
+    if (!it.zip) rows.push(['Category', TYPE_LABELS[it.type] + ({ you: ' · set by you', name: ' · from name', audio: ' · from audio' }[it.typeSrc] || '')]);
+  }
+  if (r.size) rows.push(['Size', fmtBytes(r.size)]);
+  if (!it.online) rows.push(['Folder', `${it.lib.name}${it.folder ? ' / ' + it.folder : ''}`]);
+  el.innerHTML = `<div class="fname">${escapeHtml(it.name)}${it.online ? '' : '.' + escapeHtml(it.ext)}</div>
     <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join('')}</dl>
     ${r.desc ? `<div class="desc">${escapeHtml(r.desc)}</div>` : ''}`;
 }
@@ -668,10 +745,16 @@ $('#btn-folders').addEventListener('click', () => {
 });
 $('#btn-lfe').addEventListener('click', () => { prefs.lfe = !prefs.lfe; setToggle('#btn-lfe', prefs.lfe); engine.setLfe(prefs.lfe); savePrefs(); });
 $('#monitor').addEventListener('change', e => { prefs.monitor = e.target.value; engine.setMode(prefs.monitor); savePrefs(); updateMonitorHint(); });
-$('#btn-reveal').addEventListener('click', () => S.current && api.reveal(S.current.path));
+$('#btn-reveal').addEventListener('click', () => {
+  if (!S.current) return;
+  if (!S.current.online) { api.reveal(S.current.path); return; }
+  const dl = S.downloads[S.current.online.key];
+  if (dl) api.reveal(dl.path); else toast('Not saved yet. Click Save to download it into Soundfield Downloads.');
+});
 $('#drag-handle').addEventListener('dragstart', e => {
   e.preventDefault();
   if (!S.current || S.current.zip) return;
+  if (S.current.online) { onlineDrag(); return; }
   const pcm = S.info && (S.info.codec === 'pcm' || S.info.codec === 'float');
   api.startDrag(S.current.path, S.selection && pcm ? S.selection : null);
 });
@@ -692,7 +775,7 @@ listEl.addEventListener('mousedown', e => {
 listEl.addEventListener('click', e => {
   if (!e.target.classList.contains('star')) return;
   const i = list.indexFromEvent(e);
-  if (i >= 0 && !S.view[i].isFolder) toggleFavorite(S.view[i]);
+  if (i >= 0 && !S.view[i].isFolder && !S.view[i].isMissing) toggleFavorite(S.view[i]);
 });
 listEl.addEventListener('dblclick', e => {
   const i = list.indexFromEvent(e);
@@ -710,7 +793,7 @@ listEl.addEventListener('dblclick', e => {
 listEl.addEventListener('dragstart', e => {
   const i = list.indexFromEvent(e);
   e.preventDefault();
-  if (i >= 0 && !S.view[i].zip && !S.view[i].isFolder) api.startDrag(S.view[i].path, null);
+  if (i >= 0 && !S.view[i].zip && !S.view[i].isFolder && !S.view[i].isMissing) api.startDrag(S.view[i].path, null);
 });
 listEl.addEventListener('contextmenu', async e => {
   e.preventDefault();
@@ -725,11 +808,26 @@ listEl.addEventListener('contextmenu', async e => {
     else if (pick === 'copy') { api.copyText(it.path); toast('Path copied'); }
     return;
   }
+  const curProj = S.scope.type === 'proj' ? projectById(S.scope.id) : null;
+  if (it.isMissing) {
+    list.select(i, false);
+    const pick = await api.menu([
+      { id: 'relink', label: 'Relink missing files', enabled: !!curProj },
+      { id: 'remove', label: 'Remove from this project', enabled: !!curProj },
+      { type: 'separator' },
+      { id: 'copy', label: 'Copy old path' },
+    ]);
+    if (pick === 'relink') relinkProject(curProj);
+    else if (pick === 'remove') removeFromProject(curProj, [it.path]);
+    else if (pick === 'copy') { api.copyText(it.path); toast('Path copied'); }
+    return;
+  }
   if (S.current !== it) selectIndex(i, { play: false });
   const fav = S.favorites.has(it.path);
   const items = it.zip
     ? [{ id: 'x-folder', label: `Extract to “${it.name}”` }, { id: 'x-here', label: 'Extract here' }, { type: 'separator' }]
-    : [{ id: 'play', label: 'Play' }, { id: 'fav', label: fav ? 'Remove from favorites' : 'Add to favorites' }, { type: 'separator' }];
+    : [{ id: 'play', label: 'Play' }, { id: 'fav', label: fav ? 'Remove from favorites' : 'Add to favorites' }, projectMenu(it),
+      ...(curProj ? [{ id: 'proj:remove', label: `Remove from “${curProj.name}”` }] : []), { type: 'separator' }];
   items.push({ id: 'reveal', label: 'Show in Explorer' }, { id: 'copy', label: 'Copy path' });
   if (!it.zip) {
     items.push({ type: 'separator' });
@@ -767,6 +865,9 @@ listEl.addEventListener('contextmenu', async e => {
   }
   items.push({ type: 'separator' }, { id: 'trash', label: 'Move to Recycle Bin' });
   const pick = await api.menu(items);
+  if (pick === 'proj:new') { newProject([it]); return; }
+  if (pick === 'proj:remove') { removeFromProject(curProj, [it.path]); return; }
+  if (pick && pick.startsWith('proj:')) { const p = projectById(pick.slice(5)); if (p) addToProject(p, [it]); return; }
   if (pick && pick.startsWith('dupx:')) { setDupExcluded(pick.slice(5), true); return; }
   if (pick && pick.startsWith('dupinc:')) { setDupExcluded(pick.slice(7), false); return; }
   if (pick === 'dupincall') { includeAllDupFolders(); return; }
@@ -1365,7 +1466,9 @@ $('#lib-tree').addEventListener('contextmenu', async e => {
   const lib = S.libs.find(l => l.id === sc.lib);
   if (!lib) return;
   const dir = folderPath(lib, sc.prefix);
-  const items = [{ id: 'reveal', label: 'Show in Explorer' }, { type: 'separator' }];
+  const items = [{ id: 'reveal', label: 'Show in Explorer' },
+    { id: 'savehere', label: S.saveDir && S.saveDir.toLowerCase() === dir.toLowerCase() ? '✓  Soundfield search saves here' : 'Save Soundfield search downloads here' },
+    { type: 'separator' }];
   const exact = prefs.dupExclude.some(f => f.toLowerCase() === dir.toLowerCase());
   if (exact) items.push({ id: 'dupinc', label: 'Include in duplicate search' });
   else if (isDupExcluded(dir + S.sep + 'x')) items.push({ id: '', label: 'Excluded from duplicates (a parent folder is)', enabled: false });
@@ -1386,6 +1489,7 @@ $('#lib-tree').addEventListener('contextmenu', async e => {
   }
   const pick = await api.menu(items);
   if (pick === 'reveal') api.reveal(dir);
+  else if (pick === 'savehere') onlineUI.setSaveDir(dir);
   else if (pick === 'dupx') setDupExcluded(dir, true);
   else if (pick === 'dupinc') setDupExcluded(dir, false);
   else if (pick === 'rescan') api.rescan(lib.id);
@@ -1451,7 +1555,7 @@ api.on('scan:progress', p => {
 });
 api.on('lib:updated', ({ lib, records }) => {
   let l = S.libs.find(x => x.id === lib.id);
-  if (!l) return;
+  if (!l) { l = { ...lib }; S.libs.push(l); } // added by the app itself (e.g. Online downloads)
   Object.assign(l, lib);
   S.recs[lib.id] = records;
   S.trees.set(lib.id, buildTree(records));
@@ -1462,6 +1566,7 @@ api.on('lib:updated', ({ lib, records }) => {
     if (again) S.current = again;
   }
   pruneDupes();
+  renderProjects();
   renderTree();
   applyFilters({ keepScroll: true });
 });
@@ -1484,6 +1589,12 @@ api.on('lib:status', lib => {
 function renderScanStatus() {
   const el = $('#scan-status');
   const first = [...S.scans.values()][0];
+  if (S.exportProgress) {
+    const x = S.exportProgress;
+    const pct = x.totalBytes ? (x.bytes / x.totalBytes) * 100 : x.total ? (x.done / x.total) * 100 : 0;
+    el.innerHTML = `${x.mode === 'zip' ? 'Zipping' : 'Materializing'} “${escapeHtml(x.name)}”: ${x.done.toLocaleString()} / ${x.total.toLocaleString()}<div class="bar"><i style="width:${pct}%"></i></div>`;
+    return;
+  }
   if (S.trashProgress) {
     const t = S.trashProgress;
     el.innerHTML = `Moving to Recycle Bin: ${t.done.toLocaleString()} / ${t.total.toLocaleString()}<div class="bar"><i style="width:${(t.done / t.total) * 100}%"></i></div>`;
@@ -1518,14 +1629,17 @@ function renderScanStatus() {
 document.addEventListener('keydown', e => {
   const typing = !!(e.target.matches && e.target.matches('input[type=search], input[type=text]'));
   const k = e.key;
-  if ((e.ctrlKey && k.toLowerCase() === 'f') || (k === '/' && !typing)) { e.preventDefault(); $('#search').focus(); $('#search').select(); return; }
+  const searchBox = S.mode === 'online' ? $('#o-search') : $('#search');
+  if ((e.ctrlKey && k.toLowerCase() === 'f') || (k === '/' && !typing)) { e.preventDefault(); searchBox.focus(); searchBox.select(); return; }
+  if (S.mode === 'online' && onlineUI.key(e, typing)) return; // list navigation, Enter, Escape in the Online tab
+  const libKeys = S.mode !== 'online';
   const cur = list.selected;
   const nav = d => { e.preventDefault(); selectIndex(Math.max(0, Math.min(S.view.length - 1, (cur < 0 ? (d > 0 ? -1 : S.view.length) : cur) + d))); };
-  if (k === 'ArrowDown') return nav(1);
-  if (k === 'ArrowUp') return nav(-1);
-  if (k === 'PageDown') return nav(list.pageSize());
-  if (k === 'PageUp') return nav(-list.pageSize());
-  if (k === 'Enter') {
+  if (libKeys && k === 'ArrowDown') return nav(1);
+  if (libKeys && k === 'ArrowUp') return nav(-1);
+  if (libKeys && k === 'PageDown') return nav(list.pageSize());
+  if (libKeys && k === 'PageUp') return nav(-list.pageSize());
+  if (libKeys && k === 'Enter') {
     e.preventDefault();
     if (typing) $('#search').blur();
     const row = S.view[cur];
@@ -1534,17 +1648,17 @@ document.addEventListener('keydown', e => {
     else { S.selection = null; wave.setSelection(null); startPlay(0); }
     return;
   }
-  if (k === 'Backspace' && !typing && browsing() && e.target.tagName !== 'SELECT') { e.preventDefault(); goUp(); return; }
+  if (libKeys && k === 'Backspace' && !typing && browsing() && e.target.tagName !== 'SELECT') { e.preventDefault(); goUp(); return; }
   if (k === 'Escape') {
-    if (typing && e.target.value) { e.target.value = ''; S.query = ''; applyFilters(); return; }
+    if (libKeys && typing && e.target.value) { e.target.value = ''; S.query = ''; applyFilters(); return; }
     if (S.selection) { S.selection = null; wave.setSelection(null); } else engine.stop();
     if (typing) e.target.blur();
     return;
   }
   if (typing || e.target.tagName === 'SELECT') return;
   if (k === ' ') { e.preventDefault(); togglePlay(); return; }
-  if (k === 'Home') return nav(-S.view.length);
-  if (k === 'End') return nav(S.view.length);
+  if (libKeys && k === 'Home') return nav(-S.view.length);
+  if (libKeys && k === 'End') return nav(S.view.length);
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     e.preventDefault();
     if (!S.source) return;
@@ -1557,7 +1671,13 @@ document.addEventListener('keydown', e => {
   const lk = k.toLowerCase();
   if (lk === 'l') $('#btn-loop').click();
   else if (lk === 'a') $('#btn-auto').click();
-  else if (lk === 'f') toggleFavorite(S.current);
+  else if (lk === 'f' && !(S.current && S.current.online)) toggleFavorite(S.current);
+  else if (lk === 'p' && S.current && S.current.online) toast('Save it first, then add it to a project from your library.');
+  else if (lk === 'p' && S.current && !S.current.zip) {
+    // Quick-add the sound being previewed to the project used last.
+    const p = projectById(prefs.lastProject);
+    if (p) addToProject(p, [S.current]); else newProject([S.current]);
+  }
   else if (lk === 'z') wave.fit();
   else if (lk === 'b') { $('#monitor').value = prefs.monitor === 'binaural' ? 'stereo' : 'binaural'; $('#monitor').dispatchEvent(new Event('change')); toast(`Monitor: ${$('#monitor').selectedOptions[0].textContent}`); }
   else if (k === '-' || k === '_') setVolume(prefs.volume - 1);
@@ -1588,14 +1708,18 @@ document.addEventListener('keydown', e => {
 // ------------------------------------------------------------------ sidebar sections
 // Drag the bar above "Libraries" to give Categories more or less room;
 // click a section header to collapse it.
+const SIDEBAR_TYPES_H = 220;
+function applySidebarPrefs() {
+  const side = $('#sidebar');
+  side.style.setProperty('--types-h', (prefs.typesH || SIDEBAR_TYPES_H) + 'px');
+  side.classList.toggle('types-collapsed', !!prefs.typesCollapsed);
+  side.classList.toggle('libs-collapsed', !!prefs.libsCollapsed);
+  side.classList.toggle('proj-collapsed', !!prefs.projCollapsed);
+}
 (() => {
   const side = $('#sidebar'), types = $('#types'), split = $('#side-split');
-  const DEFAULT_H = 220;
-  const apply = () => {
-    side.style.setProperty('--types-h', (prefs.typesH || DEFAULT_H) + 'px');
-    side.classList.toggle('types-collapsed', !!prefs.typesCollapsed);
-    side.classList.toggle('libs-collapsed', !!prefs.libsCollapsed);
-  };
+  const DEFAULT_H = SIDEBAR_TYPES_H;
+  const apply = applySidebarPrefs;
   const clampH = h => {
     const room = side.clientHeight - types.getBoundingClientRect().top + side.getBoundingClientRect().top - 140; // leave room for Libraries
     return Math.round(Math.max(40, Math.min(Math.max(40, room), h)));
@@ -1627,6 +1751,506 @@ document.addEventListener('keydown', e => {
   });
   apply();
 })();
+
+// ------------------------------------------------------------------ projects
+// Virtual project folders: each holds references ({ path, size, mtime }) to
+// sounds, never copies. Zip / Materialize turn them into real files.
+const lowPath = p => p.toLowerCase();
+
+function rebuildProjIndex() {
+  S.projIndex = new Map();
+  for (const p of S.projects) for (const r of p.items) {
+    const k = lowPath(r.path);
+    if (!S.projIndex.has(k)) S.projIndex.set(k, []);
+    S.projIndex.get(k).push(p);
+  }
+}
+
+function saveProjects() {
+  rebuildProjIndex();
+  api.saveProjects(S.projects);
+  renderProjects();
+}
+
+const projectById = id => S.projects.find(p => p.id === id);
+const itemsByPath = () => { const m = new Map(); for (const it of S.items) if (!it.zip) m.set(lowPath(it.path), it); return m; };
+
+// References whose file isn't in any linked library (moved, renamed, deleted or library removed).
+function missingRefs(p, byPath = itemsByPath()) {
+  return p.items.filter(r => !byPath.has(lowPath(r.path)));
+}
+
+const missingCache = new Map();
+function missingItem(ref) {
+  let m = missingCache.get(ref.path);
+  if (m) return m;
+  const file = ref.path.split(/[\\/]/).pop();
+  const dot = file.lastIndexOf('.');
+  const dir = ref.path.slice(0, ref.path.length - file.length - 1);
+  m = {
+    isMissing: true, path: ref.path, name: dot > 0 ? file.slice(0, dot) : file, ext: dot > 0 ? file.slice(dot + 1) : '',
+    folder: '', lib: { id: '', name: dir, path: dir }, rec: { rel: file, size: ref.size || 0, dur: 0, ch: 0, sr: 0, bits: 0 },
+    cls: 'multi', fmtLabel: '', type: 'unsorted', typeSrc: '', hay: file.toLowerCase(),
+  };
+  missingCache.set(ref.path, m);
+  return m;
+}
+
+function renderProjects() {
+  const box = $('#projects');
+  const counts = itemsByPath();
+  box.replaceChildren();
+  if (!S.projects.length) {
+    const e = document.createElement('div');
+    e.className = 'proj-empty';
+    e.textContent = 'Click + to start a project, then add sounds to it. Nothing is moved or copied.';
+    box.appendChild(e);
+    return;
+  }
+  for (const p of [...S.projects].sort((a, b) => collator.compare(a.name, b.name))) {
+    const miss = missingRefs(p, counts).length;
+    const row = document.createElement('div');
+    row.className = 'proj-row' + (S.scope.type === 'proj' && S.scope.id === p.id ? ' active' : '');
+    row.dataset.id = p.id;
+    row.title = `${p.name}: ${p.items.length} sound${p.items.length === 1 ? '' : 's'}${miss ? `, ${miss} missing` : ''}. Drop sounds here to add them.`;
+    row.innerHTML = `<span class="pico"></span><span class="lbl">${escapeHtml(p.name)}</span>${miss ? `<span class="miss">${miss} missing</span>` : ''}<span class="num">${p.items.length ? p.items.length.toLocaleString() : ''}</span>`;
+    box.appendChild(row);
+  }
+}
+
+function openProject(p) {
+  S.scope = { type: 'proj', id: p.id };
+  renderTree();
+  renderProjects();
+  applyFilters();
+}
+
+// Inline name editor in the Projects list; resolves with the name or null.
+function askName(initial = '', anchorRow = null) {
+  return new Promise(resolve => {
+    const box = $('#projects');
+    const row = anchorRow || document.createElement('div');
+    const old = anchorRow ? row.innerHTML : null;
+    if (!anchorRow) { row.className = 'proj-row'; box.prepend(row); box.querySelector('.proj-empty')?.remove(); }
+    row.innerHTML = '<span class="pico"></span><input type="text" spellcheck="false" placeholder="Project name">';
+    const input = row.querySelector('input');
+    input.value = initial;
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = val => {
+      if (done) return;
+      done = true;
+      if (!anchorRow) row.remove(); else row.innerHTML = old;
+      resolve(val && val.trim() ? val.trim().slice(0, 120) : null);
+    };
+    input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') finish(input.value);
+      else if (e.key === 'Escape') finish(null);
+    });
+    input.addEventListener('blur', () => finish(input.value));
+  });
+}
+
+async function newProject(initialItems = []) {
+  if (prefs.projCollapsed) { prefs.projCollapsed = false; applySidebarPrefs(); }
+  const name = await askName(uniqueProjectName('New project'));
+  if (!name) return null;
+  const p = { id: Math.random().toString(36).slice(2, 10), name, created: Date.now(), items: [] };
+  S.projects.push(p);
+  prefs.lastProject = p.id;
+  savePrefs();
+  if (initialItems.length) addToProject(p, initialItems); else saveProjects();
+  return p;
+}
+
+function uniqueProjectName(base) {
+  const names = new Set(S.projects.map(p => p.name.toLowerCase()));
+  let n = base;
+  for (let i = 2; names.has(n.toLowerCase()); i++) n = `${base} ${i}`;
+  return n;
+}
+
+function addToProject(p, items, quiet = false) {
+  const have = new Set(p.items.map(r => lowPath(r.path)));
+  let added = 0;
+  for (const it of items) {
+    if (!it || it.zip || it.isFolder || it.isMissing) continue;
+    const k = lowPath(it.path);
+    if (have.has(k)) continue;
+    have.add(k);
+    p.items.push({ path: it.path, size: it.rec.size || 0, mtime: it.rec.mtime || 0 });
+    added++;
+  }
+  prefs.lastProject = p.id;
+  savePrefs();
+  saveProjects();
+  if (S.scope.type === 'proj' && S.scope.id === p.id) applyFilters({ keepScroll: true }); else list.refresh();
+  if (!quiet) toast(added ? `Added ${added.toLocaleString()} sound${added === 1 ? '' : 's'} to “${p.name}”` : `Already in “${p.name}”`);
+  return added;
+}
+
+function removeFromProject(p, paths) {
+  const gone = new Set(paths.map(lowPath));
+  p.items = p.items.filter(r => !gone.has(lowPath(r.path)));
+  saveProjects();
+  applyFilters({ keepScroll: true });
+  toast(`Removed ${paths.length} from “${p.name}”`);
+}
+
+// Find moved / renamed files again: same file name and size somewhere in the libraries.
+function relinkProject(p) {
+  const byPath = itemsByPath();
+  const byName = new Map();
+  for (const it of byPath.values()) {
+    const k = `${it.name}.${it.ext}`.toLowerCase();
+    if (!byName.has(k)) byName.set(k, []);
+    byName.get(k).push(it);
+  }
+  let fixed = 0, left = 0;
+  for (const r of p.items) {
+    if (byPath.has(lowPath(r.path))) continue;
+    const cands = byName.get(r.path.split(/[\\/]/).pop().toLowerCase()) || [];
+    const sameSize = cands.filter(c => r.size && c.rec.size === r.size);
+    const pick = sameSize.length >= 1 ? sameSize[0] : cands.length === 1 && !r.size ? cands[0] : null;
+    if (pick && !p.items.some(o => o !== r && lowPath(o.path) === lowPath(pick.path))) {
+      r.path = pick.path; r.size = pick.rec.size; r.mtime = pick.rec.mtime || 0; fixed++;
+    } else left++;
+  }
+  saveProjects();
+  applyFilters({ keepScroll: true });
+  toast(fixed ? `Relinked ${fixed} file${fixed === 1 ? '' : 's'}${left ? ` · ${left} still missing` : ''}` : left ? `Couldn’t find ${left} missing file${left === 1 ? '' : 's'} in your libraries` : 'Nothing is missing');
+}
+
+// Small modal dialog. fields: HTML; resolves with the card element (to read inputs) or null.
+function modal({ title, sub = '', body = '', ok = 'OK', okClass = 'primary' }) {
+  return new Promise(resolve => {
+    const m = $('#modal');
+    m.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true"><h3>${escapeHtml(title)}</h3>${sub ? `<p class="sub">${sub}</p>` : ''}${body}
+      <div class="modal-actions"><button data-a="cancel">Cancel</button><button data-a="ok" class="${okClass}">${escapeHtml(ok)}</button></div></div>`;
+    m.hidden = false;
+    const card = m.querySelector('.modal-card');
+    const close = val => { m.hidden = true; m.innerHTML = ''; document.removeEventListener('keydown', onKey, true); resolve(val); };
+    const onKey = e => {
+      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(null); }
+      else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') { e.stopPropagation(); e.preventDefault(); close(card); }
+      else e.stopPropagation();
+    };
+    document.addEventListener('keydown', onKey, true);
+    m.addEventListener('mousedown', e => { if (e.target === m) close(null); }, { once: true });
+    card.querySelector('[data-a=cancel]').addEventListener('click', () => close(null));
+    card.querySelector('[data-a=ok]').addEventListener('click', () => close(card));
+    card.querySelector('[data-a=ok]').focus();
+  });
+}
+
+async function exportProject(p, mode) {
+  const byPath = itemsByPath();
+  const present = p.items.filter(r => byPath.has(lowPath(r.path))).length;
+  const miss = p.items.length - present;
+  if (!p.items.length) { toast(`“${p.name}” is empty. Add some sounds first.`); return; }
+  const zip = mode === 'zip';
+  const card = await modal({
+    title: zip ? `Zip “${p.name}”` : `Materialize “${p.name}”`,
+    sub: (zip
+      ? `Packs ${present.toLocaleString()} sound${present === 1 ? '' : 's'} into one .zip file. Your original files stay where they are.`
+      : `Copies ${present.toLocaleString()} sound${present === 1 ? '' : 's'} into a new folder called “${escapeHtml(p.name)}”. Your original files are never moved or deleted.`)
+      + (miss ? ` <span style="color:var(--warn)">${miss} missing file${miss === 1 ? '' : 's'} will be skipped and listed at the end.</span>` : ''),
+    body: `<fieldset><legend>Folder layout</legend>
+        <label><input type="radio" name="layout" value="flat" ${prefs.exportLayout !== 'keep' ? 'checked' : ''}><span>All in one folder<small>Same-named files become “name (2).wav” instead of overwriting.</small></span></label>
+        <label><input type="radio" name="layout" value="keep" ${prefs.exportLayout === 'keep' ? 'checked' : ''}><span>Keep library folders<small>Library / sub-folder / file, like the originals.</small></span></label>
+      </fieldset>
+      <fieldset><legend>Extras</legend>
+        <label><input type="checkbox" name="manifest" ${prefs.exportManifest !== false ? 'checked' : ''}><span>Include a list of original file locations</span></label>
+        ${zip ? '' : `<label><input type="checkbox" name="repoint" ${prefs.exportRepoint ? 'checked' : ''}><span>Point this project at the new copies<small>The new folder is added as a library so the copies show up here.</small></span></label>`}
+      </fieldset>`,
+    ok: zip ? 'Choose where to save…' : 'Choose destination…',
+  });
+  if (!card) return;
+  const layout = card.querySelector('input[name=layout]:checked').value;
+  const manifest = card.querySelector('input[name=manifest]').checked;
+  const repoint = !zip && card.querySelector('input[name=repoint]').checked;
+  prefs.exportLayout = layout; prefs.exportManifest = manifest; if (!zip) prefs.exportRepoint = repoint;
+  savePrefs();
+  const items = p.items.map(r => {
+    const it = byPath.get(lowPath(r.path));
+    return { path: r.path, rel: it ? `${it.lib.name}/${it.rec.rel}` : r.path.split(/[\\/]/).pop() };
+  });
+  let result;
+  try {
+    result = await api.exportProject({ mode: zip ? 'zip' : 'copy', name: p.name, items, layout, manifest, repoint });
+  } catch (err) {
+    toast(`${zip ? 'Zip' : 'Materialize'} failed: ${err.message || err}`, 6000);
+    return;
+  }
+  if (!result) return; // cancelled
+  // Remember where it went, so the project's menu can show it in Explorer later.
+  p.exports = [{ mode: zip ? 'zip' : 'copy', dest: result.dest, at: Date.now(), count: result.count },
+    ...(p.exports || []).filter(x => lowPath(x.dest) !== lowPath(result.dest))].slice(0, 12);
+  saveProjects();
+  renderProjBanner();
+  if (repoint && result.copies.length) {
+    const map = new Map(result.copies.map(c => [lowPath(c.from), c.to]));
+    for (const r of p.items) { const to = map.get(lowPath(r.path)); if (to) r.path = to; }
+    if (result.newLibrary && !S.libs.some(l => l.id === result.newLibrary.id)) {
+      S.libs.push(result.newLibrary);
+      S.recs[result.newLibrary.id] = [];
+      S.trees.set(result.newLibrary.id, buildTree([]));
+      renderTree();
+    }
+    saveProjects();
+    applyFilters({ keepScroll: true });
+  }
+}
+
+async function deleteProject(p) {
+  const card = await modal({
+    title: `Delete project “${p.name}”?`,
+    sub: `Only the project is deleted. The ${p.items.length.toLocaleString()} sound${p.items.length === 1 ? '' : 's'} in it stay exactly where they are.`,
+    ok: 'Delete project', okClass: 'danger',
+  });
+  if (!card) return;
+  S.projects = S.projects.filter(x => x !== p);
+  if (S.scope.type === 'proj' && S.scope.id === p.id) S.scope = { type: 'all' };
+  if (prefs.lastProject === p.id) { prefs.lastProject = null; savePrefs(); }
+  saveProjects();
+  renderTree();
+  applyFilters();
+}
+
+function renderProjBanner() {
+  const b = $('#proj-banner');
+  const p = S.scope.type === 'proj' ? projectById(S.scope.id) : null;
+  if (!p) { b.hidden = true; return; }
+  b.hidden = false;
+  const miss = missingRefs(p).length;
+  b.innerHTML = `<span>Project <b>${escapeHtml(p.name)}</b> · ${p.items.length.toLocaleString()} sound${p.items.length === 1 ? '' : 's'}${miss ? ` · <span class="warn">${miss} missing</span>` : ''}</span>
+    <span class="grow">${p.items.length ? '' : 'Right-click sounds → <i>Add to project</i>, drag them onto the project, or press <b>P</b> while previewing.'}</span>
+    ${miss ? '<button data-a="relink" title="Find moved or renamed files again by name and size">Relink missing</button>' : ''}
+    ${(p.exports || []).length ? '<button data-a="where" title="Open a folder or zip this project was materialized / zipped to">Show exports ▾</button>' : ''}
+    <button data-a="zip" title="Pack every sound into one .zip">Zip…</button>
+    <button data-a="mat" class="primary" title="Copy every sound into a real folder">Materialize…</button>`;
+  b.querySelector('[data-a=zip]').addEventListener('click', () => exportProject(p, 'zip'));
+  b.querySelector('[data-a=mat]').addEventListener('click', () => exportProject(p, 'copy'));
+  b.querySelector('[data-a=relink]')?.addEventListener('click', () => relinkProject(p));
+  b.querySelector('[data-a=where]')?.addEventListener('click', async () => {
+    const pick = await api.menu(exportsMenu(p));
+    if (pick) openExport(p, pick);
+  });
+}
+
+// "Show in Explorer" entries for the folders / zips a project was materialized or zipped to.
+function exportsMenu(p) {
+  const fmt = t => new Date(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const list = p.exports || [];
+  const sub = list.map((x, i) => ({ id: 'exp:' + i, label: `${x.mode === 'zip' ? 'Zip' : 'Folder'}: ${x.dest}   (${fmt(x.at)})` }));
+  if (sub.length) sub.push({ type: 'separator' }, { id: 'exp:clear', label: 'Clear this list (files are not touched)' });
+  return sub;
+}
+
+async function openExport(p, pick) {
+  if (pick === 'exp:clear') { p.exports = []; saveProjects(); renderProjBanner(); return; }
+  const x = (p.exports || [])[Number(pick.slice(4))];
+  if (!x) return;
+  const ok = await api.showExport(x.dest, x.mode === 'zip');
+  if (!ok) toast(`Couldn’t find ${x.dest}. It may have been moved, renamed or deleted.`, 5000);
+}
+
+// "Add to project ▸" submenu entries.
+function projectMenu(it) {
+  const inIt = new Set((S.projIndex.get(lowPath(it.path)) || []).map(p => p.id));
+  const sub = [...S.projects].sort((a, b) => collator.compare(a.name, b.name))
+    .map(p => ({ id: 'proj:' + p.id, label: `${inIt.has(p.id) ? '✓  ' : ''}${p.name}`, enabled: !inIt.has(p.id) }));
+  if (sub.length) sub.push({ type: 'separator' });
+  sub.push({ id: 'proj:new', label: 'New project…' });
+  return { label: 'Add to project', submenu: sub };
+}
+
+(() => {
+  const box = $('#projects');
+  $('#add-proj').addEventListener('click', e => { e.stopPropagation(); newProject(); });
+  $('#proj-title').addEventListener('click', e => {
+    if (e.target.closest('#add-proj')) return;
+    prefs.projCollapsed = !prefs.projCollapsed;
+    applySidebarPrefs();
+    savePrefs();
+  });
+  box.addEventListener('click', e => {
+    const row = e.target.closest('.proj-row[data-id]');
+    if (row && !e.target.closest('input')) openProject(projectById(row.dataset.id));
+  });
+  box.addEventListener('contextmenu', async e => {
+    e.preventDefault();
+    const row = e.target.closest('.proj-row[data-id]');
+    if (!row) return;
+    const p = projectById(row.dataset.id);
+    const viewingOther = !(S.scope.type === 'proj' && S.scope.id === p.id);
+    const listed = viewingOther ? S.view.filter(it => !it.zip && !it.isFolder && !it.isMissing) : [];
+    const items = [
+      { id: 'open', label: 'Open' },
+      { id: 'rename', label: 'Rename…' },
+      { type: 'separator' },
+      { id: 'zip', label: 'Zip…', enabled: p.items.length > 0 },
+      { id: 'mat', label: 'Materialize…', enabled: p.items.length > 0 },
+      { id: 'relink', label: 'Relink missing files', enabled: missingRefs(p).length > 0 },
+    ];
+    if ((p.exports || []).length) {
+      const latest = p.exports.find(x => x.mode === 'copy') || p.exports[0];
+      items.push({ type: 'separator' },
+        { id: 'exp:' + p.exports.indexOf(latest), label: latest.mode === 'zip' ? 'Show zip in Explorer' : 'Show materialized folder in Explorer' });
+      if (p.exports.length > 1) items.push({ label: 'All exports', submenu: exportsMenu(p) });
+    }
+    if (listed.length) items.push({ type: 'separator' }, { id: 'addall', label: `Add all ${listed.length.toLocaleString()} listed sounds` });
+    items.push({ type: 'separator' }, { id: 'del', label: 'Delete project (sounds are not touched)' });
+    const pick = await api.menu(items);
+    if (pick === 'open') openProject(p);
+    else if (pick === 'rename') { const n = await askName(p.name, row); if (n) { p.name = n; saveProjects(); renderProjBanner(); } else renderProjects(); }
+    else if (pick === 'zip') exportProject(p, 'zip');
+    else if (pick === 'mat') exportProject(p, 'copy');
+    else if (pick === 'relink') relinkProject(p);
+    else if (pick === 'addall') addToProject(p, listed);
+    else if (pick === 'del') deleteProject(p);
+    else if (pick && pick.startsWith('exp:')) openExport(p, pick);
+  });
+  // Drop sounds (dragged from the list, or from Explorer) onto a project.
+  const rowAt = e => e.target.closest && e.target.closest('.proj-row[data-id]');
+  box.addEventListener('dragover', e => {
+    const row = rowAt(e);
+    if (!row || !e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'link';
+    box.querySelectorAll('.proj-row.drop').forEach(r => r !== row && r.classList.remove('drop'));
+    row.classList.add('drop');
+  });
+  box.addEventListener('dragleave', e => { const row = rowAt(e); if (row && !row.contains(e.relatedTarget)) row.classList.remove('drop'); });
+  box.addEventListener('drop', e => {
+    const row = rowAt(e);
+    if (!row) return;
+    e.preventDefault();
+    row.classList.remove('drop');
+    const byPath = itemsByPath();
+    const found = [], outside = [];
+    for (const f of e.dataTransfer.files) {
+      const p = api.pathForFile(f);
+      if (!p) continue;
+      const it = byPath.get(lowPath(p));
+      if (it) found.push(it); else outside.push(p);
+    }
+    const p = projectById(row.dataset.id);
+    if (found.length) addToProject(p, found, !!outside.length);
+    if (outside.length) toast(`${found.length ? `Added ${found.length} · ` : ''}${outside.length} file${outside.length === 1 ? ' isn’t' : 's aren’t'} in a linked library, so ${outside.length === 1 ? 'it' : 'they'} can’t be added. Link the folder under Libraries first.`, 5000);
+  });
+  // Don't let a stray drop anywhere else navigate the window.
+  window.addEventListener('dragover', e => { if (!rowAt(e)) e.preventDefault(); });
+  window.addEventListener('drop', e => { if (!rowAt(e)) e.preventDefault(); });
+})();
+
+api.on('export:progress', p => {
+  S.exportProgress = p.finished ? null : p;
+  renderScanStatus();
+});
+
+// ------------------------------------------------------------------ online tab
+const LIC_INFO = { cc0: { label: 'CC0', credit: false }, pd: { label: 'Public domain', credit: false }, by: { label: 'CC BY', credit: true }, 'by-sa': { label: 'CC BY-SA', credit: true } };
+const ipcMessage = err => String((err && err.message) || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+
+function setDownloads(map) {
+  S.downloads = map || {};
+  S.downloadsByPath = new Map(Object.values(S.downloads).map(d => [lowPath(d.path), d]));
+}
+
+// A player item for an online result whose file (preview or saved copy) is now on disk.
+function onlineItem(r, file) {
+  const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase();
+  const it = {
+    lib: { id: 'online', name: r.sourceLabel, path: '', fourCh: 'auto' },
+    rec: { rel: `${r.title}.${ext}`, size: 0, ch: r.ch || 2, sr: r.sr || 0, bits: r.bits || 0, dur: r.duration || 0, desc: r.desc || '' },
+    path: file, name: r.title, ext, folder: '', zip: false, online: r,
+  };
+  assignLayout(it);
+  return it;
+}
+
+// Plays your saved copy if there is one, otherwise fetches the preview, then loads it into the player.
+async function loadOnline(r, { play = false } = {}) {
+  if (S.current && S.current.online && S.current.online.key === r.key) {
+    if (play && S.source) { S.selection = null; wave.setSelection(null); startPlay(0); }
+    else if (play) S.playOnLoad = S.current;
+    return;
+  }
+  const tok = ++S.onlineTok;
+  S.token++; // drop any load still in flight
+  engine.stop();
+  S.current = null; S.source = null; S.layout = null; S.info = null; S.selection = null;
+  $('#zip-panel').hidden = true;
+  S.loadingKey = r.key;
+  wave.clear('Loading preview…');
+  speakers.setLayout(null);
+  fillLayoutSelect();
+  $('#file-meta').innerHTML = `<div class="fname">${escapeHtml(r.title)}</div>`;
+  let file = null;
+  const dl = S.downloads[r.key];
+  if (dl && await api.probe(dl.path).catch(() => null)) file = dl.path;
+  try { if (!file) file = await api.online.preview(r); }
+  catch (err) {
+    if (tok === S.onlineTok) wave.clear('Couldn’t load the preview. Check your internet connection.');
+    return;
+  }
+  if (tok !== S.onlineTok) return;
+  S.loadingKey = null;
+  await loadItem(onlineItem(r, file), { play });
+}
+
+// Downloads into Documents\Soundfield Downloads (credited in Credits.txt).
+async function saveOnline(r) {
+  try {
+    const entry = await api.online.download(r, S.saveDir);
+    S.downloads[r.key] = entry;
+    setDownloads(S.downloads);
+    onlineUI.refresh();
+    if (S.current && S.current.online && S.current.online.key === r.key) renderMeta();
+    if (!entry.already) {
+      toast(`Saved “${r.title}” to ${onlineUI.destLabel()}${entry.quality === 'preview' ? ' · preview quality (connect a Freesound account for originals)' : ''}`, 5000);
+    }
+    return entry;
+  } catch (err) {
+    toast(`Couldn’t save “${r.title}”: ${ipcMessage(err)}`, 6000);
+    return null;
+  }
+}
+
+// Dragging an online sound into a DAW needs a real file, so it's saved first.
+async function onlineDrag() {
+  const r = S.current.online;
+  const dl = S.downloads[r.key];
+  if (dl) { api.startDrag(dl.path, null); return; }
+  toast('Saving it first…', 20000);
+  if (await saveOnline(r)) toast('Saved. Now drag it into your DAW.', 3500);
+}
+
+function setMode(mode) {
+  S.mode = mode;
+  $('#app').classList.toggle('online', mode === 'online');
+  $('#online').hidden = mode !== 'online';
+  $('#online-bar').hidden = mode !== 'online';
+  for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.mode === mode);
+  prefs.mode = mode;
+  savePrefs();
+  if (mode === 'online') onlineUI.show(); else listEl.focus();
+}
+
+const onlineUI = createOnline({ api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, fmtBytes, ipcMessage, loadOnline, saveOnline, startPlay, LIC_INFO });
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+// Anything picked in the sidebar belongs to the library.
+$('#sidebar').addEventListener('click', e => {
+  if (S.mode === 'online' && e.target.closest('.side-item, .tree-row, .proj-row, .type-row')) setMode('library');
+}, true);
+api.on('online:progress', p => onlineUI.progress(p));
+api.on('preview:progress', p => {
+  if (p.key !== S.loadingKey || S.current || !p.total) return;
+  wave.clear(`Loading preview… ${Math.min(99, Math.round((p.got / p.total) * 100))}%`);
+});
 
 // ------------------------------------------------------------------ toast
 let toastTimer = 0;
@@ -1661,10 +2285,17 @@ async function boot() {
   S.overrides = st.overrides || {};
   S.analysis = st.analysis || {};
   S.typeOverrides = st.typeOverrides || {};
+  S.projects = Array.isArray(st.projects) ? st.projects : [];
+  setDownloads(st.downloads);
+  rebuildProjIndex();
+  applySidebarPrefs();
   rebuildItems();
   renderTree();
+  renderProjects();
   applyFilters();
   if (S.libs.length) listEl.focus();
-  window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, openFolder, goUp, folderChain, excludingFolder, extraCopies }; // handy for debugging (F12)
+  if (prefs.mode === 'online') setMode('online');
+  window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, openFolder, goUp, folderChain, excludingFolder, extraCopies,
+    addToProject, removeFromProject, relinkProject, openProject, projectById, exportProject, renderProjects, saveProjects, setMode, onlineUI, loadOnline }; // handy for debugging (F12)
 }
 boot();

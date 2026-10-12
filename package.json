@@ -26,9 +26,11 @@
   },
   "scripts": {
     "start": "electron .",
-    "icon": "node tools/make-icon.js"
+    "icon": "node tools/make-icon.js",
+    "build": "node tools/build.js"
   },
   "devDependencies": {
+    "@electron/packager": "^20.3.0",
     "electron": "44.7.0"
   }
 }

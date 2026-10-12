@@ -102,6 +102,7 @@ Click **Online** (next to *Library* at the top). It has two modes, switched unde
 - **Preview:** click a result to see its waveform; double-click (or Enter) to play. Previews are cached in the app's own folder, not your libraries.
 - **Save** (or `S`, or right-click → *Save*) downloads it to `Documents\Soundfield Downloads\<Source>`, which is added as the *Online downloads* library. Each save is recorded in `Credits.txt` there, with the creator, link and licence, so you always know where a sound came from. *Copy credit line* copies that line for one sound. Dragging a result to your DAW saves it first.
 - **Save to:** the **Save to** button (right of the mode switch) shows where **Save** puts sounds this session, and you can change it at any time: *Choose folder…*, a recent folder, or back to *Soundfield Downloads (default)*. You can also right-click any folder under Libraries → *Save Soundfield search downloads here*. Sounds go straight into the chosen folder, with its own `Credits.txt`, and the folder is added as a library if it isn't in one already. Each launch starts at the default again. Saving a sound you already saved elsewhere makes another copy in the current folder.
+- **Epidemic Sound (your subscription):** click **Epidemic** in the top bar and paste your own *Epidemic account key* (epidemicsound.com → Account → API keys). It's stored encrypted on this PC only. Search, quick previews and saves all go through Epidemic's official MCP server with that key, so they're covered by your subscription and nothing is counted. Saves are WAV. Each person must use their own account key; never share yours. If saving says your account isn't allowed to download, the key belongs to an Epidemic account without a plan that includes sound-effect downloads. A *developer key* from the [Developer Portal](https://developers.epidemicsound.com/) is optional: it's only used for searching when there's no account key, and never for listening or saving, because on the free developer plan every such call counts toward a 50-download limit with no commercial licence. Epidemic sounds are excluded from Soundfield's audio analysis, because their licence forbids data mining. Their names already give their category. Turn Epidemic on or off under **Sources ▾**.
 - **Freesound key and account (free):** click **Freesound** in the top bar. Without a key, Freesound is searched through Openverse (an older index, about 200 searches a day). With a free API key, search uses Freesound directly. Connecting your Freesound account as well makes **Save** download the original WAV / AIFF / FLAC instead of the MP3 preview. The key and account tokens are stored encrypted with your Windows account.
 
 ### Website search
@@ -166,5 +167,9 @@ The sidebar lists the categories that have sounds. Click one to filter (Ctrl-cli
 | `L` / `A` / `B` | Loop / auto-play / toggle binaural |
 | `F` | Favorite |
 | Ctrl+F or `/` | Search (`-word` excludes, `"exact phrase"` matches a phrase) |
+| Shift-click / Shift+↑↓ | Select every sound between the last one clicked and this one |
+| Ctrl-click | Add a sound to the selection, or remove it |
+| Ctrl+A | Select all listed sounds (Esc clears the selection) |
+| Delete | Move the selected sound(s) to the Recycle Bin (you confirm first; restorable) |
 | Esc | Clear selection, then stop |
 | F12 | Developer tools |

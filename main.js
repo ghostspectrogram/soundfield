@@ -177,7 +177,8 @@ function pumpAnalysis() {
   const id = analysisQueue.shift();
   const lib = libraries.find(l => l.id === id);
   if (!lib || lib.offline) return pumpAnalysis();
-  const records = store.index(id);
+  const epi = new Set(Object.values(store.downloads()).filter(d => d.source === 'epidemic').map(d => path.resolve(d.path).toLowerCase()));
+  const records = store.index(id).filter(r => !epi.has(path.join(lib.path, r.rel).toLowerCase()));
   const cache = store.analysis(id);
   // Forget files that are gone.
   const live = new Set(records.map(r => r.rel));
@@ -537,6 +538,11 @@ function registerIpc() {
   ipcMain.handle('clipboard:write', (e, text) => { clipboard.writeText(String(text)); return true; });
 
   ipcMain.on('drag:start', async (e, p, region) => {
+    if (Array.isArray(p)) { // several selected sounds
+      const files = p.filter(f => typeof f === 'string' && fs.existsSync(f));
+      if (files.length) { try { e.sender.startDrag({ file: files[0], files, icon: getDragIcon() }); } catch (err) { console.error('startDrag', err); } }
+      return;
+    }
     let file = p;
     if (region) {
       try {
@@ -568,7 +574,7 @@ function onlineSettings() {
   return { apiKey: unseal(o.fsKey), clientId: o.fsClientId || '', token: unseal(o.fsToken), refresh: unseal(o.fsRefresh), expires: o.fsExpires || 0, user: o.fsUser || '' };
 }
 function saveOnlineSettings(s) {
-  store.saveOnline({ fsKey: seal(s.apiKey), fsClientId: s.clientId, fsToken: seal(s.token), fsRefresh: seal(s.refresh), fsExpires: s.expires, fsUser: s.user });
+  store.saveOnline({ ...store.online(), fsKey: seal(s.apiKey), fsClientId: s.clientId, fsToken: seal(s.token), fsRefresh: seal(s.refresh), fsExpires: s.expires, fsUser: s.user });
 }
 function publicOnline(s = onlineSettings()) {
   return { hasKey: !!s.apiKey, keyHint: s.apiKey ? '••••' + s.apiKey.slice(-4) : '', clientId: s.clientId, connected: !!s.refresh, user: s.user, callback: FS_CALLBACK };
@@ -603,6 +609,38 @@ async function freesoundBearer() {
   return s.token;
 }
 
+// ------------------------------------------------------------------ Epidemic Sound
+// Everything goes through Epidemic's MCP server with your own Epidemic ACCOUNT key: search,
+// quick previews (a low-quality MP3 link that comes with each result) and WAV saves, all covered
+// by your subscription with nothing counted. Each person uses their own key. A developer key
+// (Partner API) is only used for searching when no account key is set.
+const keyHint = k => (k ? '••••' + k.slice(-4) : '');
+function epiSettings() {
+  const o = store.online();
+  return { apiKey: unseal(o.epKey), accountKey: unseal(o.epAccountKey) };
+}
+function saveEpi(s) {
+  const o = store.online();
+  for (const k of ['epClientId', 'epToken', 'epRefresh', 'epExpires', 'epRefreshExpires', 'epUser']) delete o[k]; // old sign-in fields
+  store.saveOnline({ ...o, epKey: seal(s.apiKey), epAccountKey: seal(s.accountKey) });
+}
+function publicEpi(s = epiSettings()) {
+  return { hasKey: !!s.apiKey, keyHint: keyHint(s.apiKey), hasAccountKey: !!s.accountKey, accountKeyHint: keyHint(s.accountKey) };
+}
+
+// Signed file URLs, per sound and format, reused for a while within the session.
+const epiUrls = new Map(); // `${id}|${fileType}` -> { url, at }
+async function epiFileUrl(id, fileType) {
+  const { accountKey } = epiSettings();
+  if (!accountKey) throw new Error('Add your Epidemic account key to listen and save (the Epidemic button at the top).');
+  const k = `${id}|${fileType}`;
+  const hit = epiUrls.get(k);
+  if (hit && Date.now() - hit.at < 20 * 60 * 1000) return hit.url;
+  const url = await online.epidemicAssetUrl(id, fileType, accountKey);
+  epiUrls.set(k, { url, at: Date.now() });
+  return url;
+}
+
 function prunePreviews() {
   try {
     const dir = previewDir();
@@ -624,6 +662,11 @@ function fetchPreview(r) {
   const file = previewFile(r);
   if (fs.existsSync(file)) return Promise.resolve(file);
   if (previewJobs.has(file)) return previewJobs.get(file);
+  if (r.source === 'epidemic' && !r.previewUrl) {
+    const job = epiFileUrl(r.id, 'MP3').then(url => { previewJobs.delete(file); return fetchPreview({ ...r, previewUrl: url }); });
+    previewJobs.set(file, job.finally(() => previewJobs.delete(file)));
+    return previewJobs.get(file);
+  }
   if (!/^https:\/\//.test(r.previewUrl || '')) return Promise.reject(new Error('No preview available'));
   let last = 0;
   const progress = (got, total) => {
@@ -640,7 +683,11 @@ function fetchPreview(r) {
 }
 
 function registerOnlineIpc() {
-  ipcMain.handle('online:search', (e, req) => online.search(req, onlineSettings()));
+  ipcMain.handle('online:search', async (e, req) => {
+    const auth = onlineSettings();
+    if ((req.sources || []).includes('epidemic')) auth.epidemic = epiSettings(); // { apiKey, accountKey }
+    return online.search(req, auth);
+  });
 
   // Previews are cached in the app's own folder (not your libraries) so the player can show them.
   // Requests for the same preview (a click while it's being pre-loaded) share one download.
@@ -658,7 +705,8 @@ function registerOnlineIpc() {
     // Already saved in this folder: nothing to do. Saved somewhere else: save another copy here.
     if (known && fs.existsSync(known.path) && path.dirname(known.path).toLowerCase() === dir.toLowerCase()) return { ...known, already: true };
     let url = r.previewUrl, ext = r.previewExt || 'mp3', headers = {}, quality = 'preview';
-    if (r.source === 'commons') { quality = 'original'; ext = r.ext; }
+    if (r.source === 'epidemic') { url = await epiFileUrl(r.id, 'WAV'); quality = 'original'; ext = 'wav'; } // your subscription, via the MCP server
+    else if (r.source === 'commons') { quality = 'original'; ext = r.ext; }
     else if (r.downloadUrl) { url = r.downloadUrl; quality = 'original'; ext = r.ext; } // Internet Archive original file
     else if (r.source === 'freesound' && r.original) {
       const bearer = await freesoundBearer();
@@ -765,6 +813,25 @@ function registerOnlineIpc() {
     if (!code) throw new Error('Paste the code Freesound showed you');
     await freesoundToken({ grant_type: 'authorization_code', code });
     return publicOnline();
+  });
+  ipcMain.handle('epidemic:settings', () => publicEpi());
+  // Keys are only replaced when a new one is typed; forget: 'apiKey' | 'accountKey' removes one.
+  ipcMain.handle('epidemic:set', (e, { apiKey, accountKey, forget } = {}) => {
+    const s = epiSettings();
+    if (typeof apiKey === 'string' && apiKey.trim()) s.apiKey = apiKey.trim();
+    if (typeof accountKey === 'string' && accountKey.trim() && accountKey.trim() !== s.accountKey) { s.accountKey = accountKey.trim(); epiUrls.clear(); }
+    if (forget === 'apiKey') s.apiKey = '';
+    if (forget === 'accountKey') { s.accountKey = ''; epiUrls.clear(); }
+    saveEpi(s);
+    return publicEpi(s);
+  });
+  // Checks the account key with Epidemic (lists the MCP tools; downloads nothing).
+  ipcMain.handle('epidemic:check', async () => {
+    const { accountKey } = epiSettings();
+    if (!accountKey) throw new Error('No account key saved yet');
+    const tools = await online.epidemicCheckKey(accountKey);
+    if (!tools.includes('DownloadSoundEffect')) throw new Error('This key works, but Epidemic didn’t offer sound effect downloads for it');
+    return { ok: true, tools: tools.length };
   });
   ipcMain.handle('online:disconnect', () => {
     const s = onlineSettings();

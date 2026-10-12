@@ -42,6 +42,7 @@ const LIC_TIPS = {
   cc0: 'CC0: use it anywhere, change it, no credit needed.',
   pd: 'Public domain: use it anywhere, change it, no credit needed.',
   by: 'CC BY: use it anywhere, including paid work. You must credit the creator (Soundfield writes the credit line to Credits.txt).',
+  epidemic: 'Epidemic Sound: covered by your own Epidemic subscription. No credit needed; anything you publish while subscribed stays cleared.',
   'by-sa': 'CC BY-SA: use it anywhere with credit, but anything you make from it must be shared under the same licence. Often impractical for film/game work.',
 };
 
@@ -79,7 +80,7 @@ export function createOnline(ctx) {
   });
 
   const srcMenu = $('#dd-src-menu'), srcBtn = $('#dd-src-btn');
-  if (Array.isArray(prefs.onlineSources)) srcMenu.querySelectorAll('input').forEach(i => { i.checked = prefs.onlineSources.includes(i.value) || !(prefs.onlineKnownSources || ['freesound', 'commons']).includes(i.value); });
+  if (Array.isArray(prefs.onlineSources)) srcMenu.querySelectorAll('input').forEach(i => { i.checked = prefs.onlineSources.includes(i.value) || (!(prefs.onlineKnownSources || ['freesound', 'commons']).includes(i.value) && i.defaultChecked); });
   prefs.onlineKnownSources = [...srcMenu.querySelectorAll('input')].map(i => i.value);
   const sources = () => [...srcMenu.querySelectorAll('input:checked')].map(i => i.value);
   const srcLabel = () => {
@@ -94,6 +95,7 @@ export function createOnline(ctx) {
   srcMenu.addEventListener('change', () => { prefs.onlineSources = sources(); savePrefs(); srcLabel(); if (O.query) runSearch(true); });
 
   $('#o-settings').addEventListener('click', settingsDialog);
+  $('#o-epi').addEventListener('click', () => epidemicDialog());
 
   // ---------------------------------------------------------------- save folder (this session)
   // Starts at Documents\Soundfield Downloads every launch; recently used folders are remembered.
@@ -150,7 +152,7 @@ export function createOnline(ctx) {
     document.querySelectorAll('#o-modes [data-omode]').forEach(b => b.classList.toggle('on', (b.dataset.omode === 'web') === w));
     $('#o-mode-hint').textContent = w
       ? 'Sound sites that open your search in your browser. Hover a site for its licence terms.'
-      : 'Sounds you can preview here and save straight into Soundfield, only attribution-free (CC0 and public domain).';
+      : 'Sounds you can preview here and save straight into Soundfield, no credit needed: CC0, public domain, and Epidemic Sound through your subscription.';
     input.placeholder = w ? 'Search sound sites…  e.g.  bees' : 'Search free sound effects, then press Enter…  e.g.  bees';
     $('#o-web').hidden = !w;
     $('#o-header').hidden = w;
@@ -245,10 +247,14 @@ export function createOnline(ctx) {
     const st = $('#o-status');
     if (!O.query || web()) { st.hidden = true; return; }
     const parts = [];
-    const names = { freesound: 'Freesound', commons: 'Wikimedia Commons', archive: 'Internet Archive' };
+    const names = { freesound: 'Freesound', commons: 'Wikimedia Commons', archive: 'Internet Archive', epidemic: 'Epidemic Sound' };
     for (const [k, n] of Object.entries(O.totals)) parts.push(`${names[k] || k}: ${Number(n).toLocaleString()} match${n === 1 ? '' : 'es'}`);
     if (O.loading) parts.push('Searching…');
     for (const [k, msg] of Object.entries(O.errors)) parts.push(`<span class="err">${escapeHtml(names[k] || 'Search')}: ${escapeHtml(msg)}</span>`);
+    const ep = O.epi;
+    if (sources().includes('epidemic') && ep && !ep.hasAccountKey) parts.push(ep.hasKey
+      ? 'Epidemic Sound: add your Epidemic account key to listen and save. <button data-x="epi">Add account key</button>'
+      : 'Epidemic Sound needs your Epidemic account key. <button data-x="epi">Set up Epidemic</button>');
     const s = O.settings;
     if (sources().includes('freesound') && s) {
       if (!s.hasKey) parts.push('Freesound is searched through Openverse (older index, 200 searches a day), and Freesound saves are MP3 previews. <button data-x="settings">Add a free Freesound key and account</button>');
@@ -257,7 +263,7 @@ export function createOnline(ctx) {
     st.innerHTML = parts.map(p => `<span>${p}</span>`).join('');
     st.hidden = !parts.length;
   }
-  $('#o-status').addEventListener('click', e => { if (e.target.closest('[data-x=settings]')) settingsDialog(); });
+  $('#o-status').addEventListener('click', e => { if (e.target.closest('[data-x=settings]')) settingsDialog(); else if (e.target.closest('[data-x=epi]')) epidemicDialog(); });
 
   // ---------------------------------------------------------------- rows
   function fmtFormat(r) {
@@ -507,12 +513,89 @@ export function createOnline(ctx) {
     if (O.query) runSearch(true);
   }
 
+  // ---------------------------------------------------------------- Epidemic Sound
+  async function refreshEpi() {
+    try { O.epi = await api.epidemic.settings(); } catch {}
+    const b = $('#o-epi');
+    const ready = !!(O.epi && O.epi.hasAccountKey);
+    b.classList.toggle('on', ready);
+    b.title = ready ? 'Epidemic Sound: your account key is set (previews and WAV saves)' : 'Epidemic Sound: add your keys';
+    renderStatus();
+  }
+
+  function enableEpidemicSource() {
+    const box = srcMenu.querySelector('input[value=epidemic]');
+    if (box && !box.checked) { box.checked = true; prefs.onlineSources = sources(); savePrefs(); srcLabel(); }
+  }
+
+  async function epidemicDialog() {
+    await refreshEpi();
+    const st = O.epi || {};
+    const keyRow = (name, has, hint, label, help, ph) => `
+        <label class="field"><span>${label}</span><input name="${name}" type="password" placeholder="${has ? `saved (${escapeHtml(hint)}). Paste a new one to replace it` : ph}" spellcheck="false" autocomplete="off"></label>
+        <div class="key-help">${help}${has ? ` · <a data-x="forget-${name}">Remove</a>` : ''}</div>`;
+    const done = modal({
+      title: 'Epidemic Sound',
+      sub: 'Searching, listening and saving all use <b>your own</b> Epidemic subscription through Epidemic’s official MCP server: saves are WAV, and nothing is counted. Keys are stored encrypted on this PC only.',
+      body: keyRow('accountKey', st.hasAccountKey, st.accountKeyHint, 'Epidemic account key',
+          'On epidemicsound.com: <a data-x="account">Account → API keys</a>. It’s tied to your account, valid for a year, and must not be shared.', 'paste your account key')
+        + keyRow('apiKey', st.hasKey, st.keyHint, 'Developer key (optional)',
+          'Not needed with an account key. From the <a data-x="portal">Developer Portal</a> → API keys; only used for searching when there’s no account key, never for listening or saving.', 'epidemic_live_…')
+        + `<div class="acct" id="epi-check"><span>${st.hasAccountKey ? 'Account key saved.' : 'No account key yet.'}</span>${st.hasAccountKey ? '<button data-x="check">Check key</button>' : ''}</div>`,
+      ok: 'Save',
+    });
+    const card = document.querySelector('#modal .modal-card');
+    card.classList.add('wide');
+    const val = n => card.querySelector(`input[name=${n}]`).value.trim();
+    const check = async () => {
+      const box = card.querySelector('#epi-check');
+      box.innerHTML = '<span>Checking with Epidemic Sound…</span>';
+      try {
+        await api.epidemic.check();
+        box.innerHTML = '<span class="ok">●</span><span>Your account key works. Previews and WAV saves are ready.</span>';
+        return true;
+      } catch (err) {
+        box.innerHTML = `<span style="color:var(--warn)">${escapeHtml(ipcMessage(err))}</span>`;
+        return false;
+      }
+    };
+    card.addEventListener('click', async e => {
+      const x = e.target.closest('[data-x]');
+      if (!x) return;
+      e.preventDefault();
+      if (x.dataset.x === 'account') api.openExternal('https://www.epidemicsound.com/account/api-keys');
+      else if (x.dataset.x === 'portal') api.openExternal('https://developers.epidemicsound.com/');
+      else if (x.dataset.x === 'check') check();
+      else if (x.dataset.x.startsWith('forget-')) {
+        O.epi = await api.epidemic.set({ forget: x.dataset.x.slice(7) });
+        x.closest('.key-help').previousElementSibling.querySelector('input').placeholder = 'removed';
+        x.remove();
+        refreshEpi();
+      }
+    });
+    const ok = await done;
+    if (ok) {
+      try {
+        const newAccount = !!val('accountKey');
+        O.epi = await api.epidemic.set({ apiKey: val('apiKey'), accountKey: val('accountKey') });
+        if (O.epi.hasKey || O.epi.hasAccountKey) enableEpidemicSource();
+        if (newAccount) {
+          try { await api.epidemic.check(); toast('Epidemic Sound: your account key works. Previews and WAV saves are ready.', 4500); }
+          catch (err) { toast(`Epidemic Sound: ${ipcMessage(err)}`, 7000); }
+        } else toast('Epidemic Sound settings saved');
+      } catch (err) { toast(`Epidemic Sound: ${ipcMessage(err)}`, 6000); }
+    }
+    await refreshEpi();
+    if (ok && O.query && sources().includes('epidemic')) runSearch(true);
+  }
+
   // ---------------------------------------------------------------- public
   let refreshQueued = false;
   return {
     show() {
       applyOMode();
       refreshSettings();
+      refreshEpi();
       if (!O.query || web()) setTimeout(() => input.focus(), 0); else listEl.focus();
     },
     setMode: setOMode,

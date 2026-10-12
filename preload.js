@@ -41,6 +41,11 @@ contextBridge.exposeInMainWorld('api', {
     code: text => ipcRenderer.invoke('online:code', text),
     disconnect: () => ipcRenderer.invoke('online:disconnect'),
   },
+  epidemic: {
+    settings: () => ipcRenderer.invoke('epidemic:settings'),
+    set: s => ipcRenderer.invoke('epidemic:set', s),
+    check: () => ipcRenderer.invoke('epidemic:check'),
+  },
   openExternal: url => ipcRenderer.invoke('open:external', url),
   exists: p => ipcRenderer.invoke('file:exists', p),
   on: (channel, cb) => {

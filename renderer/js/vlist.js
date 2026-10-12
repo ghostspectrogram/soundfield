@@ -2,8 +2,9 @@
 // scroll as smoothly as 20.
 
 export class VList {
-  constructor(el, { rowHeight, render }) {
+  constructor(el, { rowHeight, render, isSelected }) {
     this.el = el;
+    this.isSelected = isSelected || null; // (index) => bool, for multi-selection; default: index === selected
     this.rowH = rowHeight;
     this.render = render; // (rowEl, item, index) => void
     this.items = [];
@@ -48,7 +49,7 @@ export class VList {
         const item = this.items[i];
         if (force || r._item !== item) { this.render(r, item, i); r._item = item; }
         r._i = i;
-        r.classList.toggle('selected', i === this.selected);
+        r.classList.toggle('selected', this.isSelected ? this.isSelected(i) : i === this.selected);
         r.classList.toggle('odd', (i & 1) === 1);
       }
     });
@@ -62,7 +63,7 @@ export class VList {
       else if (top + this.rowH > el.scrollTop + el.clientHeight) el.scrollTop = top + this.rowH - el.clientHeight;
     }
     this.paint(false);
-    for (const r of this.pool) r.classList.toggle('selected', r._i === i);
+    for (const r of this.pool) r.classList.toggle('selected', this.isSelected ? r._i >= 0 && this.isSelected(r._i) : r._i === i);
   }
 
   pageSize() { return Math.max(1, Math.floor(this.el.clientHeight / this.rowH) - 1); }

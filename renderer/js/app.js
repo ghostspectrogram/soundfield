@@ -56,6 +56,9 @@ const S = {
   downloads: {}, // online key -> { path, licence, creator, … } for sounds saved from the Online tab
   downloadsByPath: new Map(),
   onlineTok: 0,
+  multi: new Set(), // paths of sounds picked with Ctrl / Shift click (empty = just the current row)
+  anchor: -1, // where a Shift-click range starts
+  countText: '',
   saveDir: null, // Soundfield search save folder for this session (null = Documents\Soundfield Downloads)
 };
 
@@ -65,7 +68,7 @@ const wave = new WaveView({
   playhead: $('#playhead'), hover: $('#hover'), labels: $('#lanes-labels'),
 });
 const speakers = new SpeakerView($('#speakers'));
-const list = new VList($('#list'), { rowHeight: 26, render: renderRow });
+const list = new VList($('#list'), { rowHeight: 26, render: renderRow, isSelected: i => (S.multi.size ? !!S.view[i] && S.multi.has(S.view[i].path) : i === list.selected) });
 $('#list').tabIndex = 0;
 
 // ------------------------------------------------------------------ items
@@ -245,11 +248,14 @@ function applyFilters({ keepScroll = false } = {}) {
   document.querySelectorAll('.proj-row[data-id]').forEach(r => r.classList.toggle('active', sc.type === 'proj' && sc.id === r.dataset.id));
   renderCrumbs(searching);
   if (!keepScroll) $('#list').scrollTop = 0;
+  if (S.multi.size) { const inView = new Set(view.map(it => it.path)); for (const p of [...S.multi]) if (!inView.has(p)) S.multi.delete(p); }
+  if (!keepScroll) S.anchor = -1;
   list.setItems(view);
   const idx = S.current ? view.indexOf(S.current) : -1;
   list.select(idx, false);
-  $('#count').textContent = (folders.length ? `${folders.length.toLocaleString()} folder${folders.length === 1 ? '' : 's'} · ` : '') +
+  S.countText = (folders.length ? `${folders.length.toLocaleString()} folder${folders.length === 1 ? '' : 's'} · ` : '') +
     `${out.length.toLocaleString()} of ${S.items.length.toLocaleString()}`;
+  updateSelCount();
   $('#n-all').textContent = S.items.length.toLocaleString();
   $('#n-fav').textContent = S.favorites.size ? S.favorites.size.toLocaleString() : '';
   $('#empty').hidden = S.libs.length > 0;
@@ -764,13 +770,70 @@ function updateMonitorHint() {
   o.textContent = `Discrete outputs (${engine.deviceChannels} ch device)`;
 }
 
+// ------------------------------------------------------------------ multi-selection
+// Click selects one sound; Ctrl-click adds/removes; Shift-click selects everything between
+// the last clicked sound and this one; Ctrl+A selects all listed. Folder rows are never selected.
+const selectable = it => !!it && !it.isFolder && !it.isMissing;
+
+function selectedItems() {
+  if (S.multi.size) return S.view.filter(it => selectable(it) && S.multi.has(it.path));
+  const it = S.view[list.selected];
+  return selectable(it) ? [it] : [];
+}
+
+function setMulti(items) {
+  S.multi = new Set(items.filter(selectable).map(it => it.path));
+  if (S.multi.size < 2) S.multi.clear();
+  list.refresh();
+  updateSelCount();
+}
+
+function selectRange(a, b) {
+  const lo = Math.max(0, Math.min(a, b)), hi = Math.min(S.view.length - 1, Math.max(a, b));
+  setMulti(S.view.slice(lo, hi + 1));
+}
+
+function updateSelCount() {
+  const n = S.multi.size;
+  const bytes = n ? selectedItems().reduce((t, it) => t + (it.rec.size || 0), 0) : 0;
+  $('#count').textContent = (n ? `${n.toLocaleString()} selected (${fmtBytes(bytes)}) · ` : '') + S.countText;
+}
+
+function recycleSelected() {
+  const items = selectedItems();
+  if (!items.length) return;
+  const bytes = items.reduce((t, it) => t + (it.rec.size || 0), 0);
+  recycle(items.map(it => it.path), `${items.length.toLocaleString()} file${items.length === 1 ? '' : 's'} · ${fmtBytes(bytes)}. You can restore them from the Recycle Bin.`);
+}
+
 // ------------------------------------------------------------------ list interactions
 const listEl = $('#list');
 listEl.addEventListener('mousedown', e => {
   const i = list.indexFromEvent(e);
   if (i < 0) return;
   if (e.target.classList.contains('star')) return;
-  if (e.button === 0) selectIndex(i, { play: false }); // a click only selects; double-click plays
+  if (e.button !== 0) return;
+  const it = S.view[i];
+  if (e.shiftKey) {
+    // Everything between the last clicked sound and this one.
+    const from = S.anchor >= 0 ? S.anchor : list.selected >= 0 ? list.selected : i;
+    selectRange(from, i);
+    if (selectable(it)) selectIndex(i, { play: false }); else list.select(i, false);
+    return;
+  }
+  if (e.ctrlKey || e.metaKey) {
+    // Add or remove one sound.
+    if (!S.multi.size) { const cur = S.view[list.selected]; if (selectable(cur)) S.multi.add(cur.path); }
+    if (S.multi.has(it.path)) S.multi.delete(it.path); else if (selectable(it)) S.multi.add(it.path);
+    S.anchor = i;
+    list.selected = i;
+    list.refresh();
+    updateSelCount();
+    return;
+  }
+  S.anchor = i;
+  if (S.multi.size) setMulti([]);
+  selectIndex(i, { play: false }); // a click only selects; double-click plays
 });
 listEl.addEventListener('click', e => {
   if (!e.target.classList.contains('star')) return;
@@ -793,7 +856,10 @@ listEl.addEventListener('dblclick', e => {
 listEl.addEventListener('dragstart', e => {
   const i = list.indexFromEvent(e);
   e.preventDefault();
-  if (i >= 0 && !S.view[i].zip && !S.view[i].isFolder && !S.view[i].isMissing) api.startDrag(S.view[i].path, null);
+  if (i < 0) return;
+  // Dragging one of several selected sounds drags all of them.
+  if (S.multi.size > 1 && S.multi.has(S.view[i].path)) { api.startDrag(selectedItems().filter(x => !x.zip).map(x => x.path), null); return; }
+  if (!S.view[i].zip && !S.view[i].isFolder && !S.view[i].isMissing) api.startDrag(S.view[i].path, null);
 });
 listEl.addEventListener('contextmenu', async e => {
   e.preventDefault();
@@ -822,6 +888,31 @@ listEl.addEventListener('contextmenu', async e => {
     else if (pick === 'copy') { api.copyText(it.path); toast('Path copied'); }
     return;
   }
+  if (S.multi.size > 1 && S.multi.has(it.path)) {
+    const sel = selectedItems();
+    const n = sel.length;
+    const bytes = sel.reduce((t, x) => t + (x.rec.size || 0), 0);
+    const projSub = [...S.projects].sort((a, b) => collator.compare(a.name, b.name)).map(p => ({ id: 'mproj:' + p.id, label: p.name }));
+    if (projSub.length) projSub.push({ type: 'separator' });
+    projSub.push({ id: 'mproj:new', label: 'New project…' });
+    const pick = await api.menu([
+      { id: '', label: `${n.toLocaleString()} sounds selected (${fmtBytes(bytes)})`, enabled: false },
+      { type: 'separator' },
+      { label: `Add ${n.toLocaleString()} to project`, submenu: projSub },
+      { id: 'mcopy', label: `Copy ${n.toLocaleString()} paths` },
+      { id: 'mclear', label: 'Clear selection' },
+      { type: 'separator' },
+      { id: 'mtrash', label: `Move ${n.toLocaleString()} files to Recycle Bin   (Del)` },
+    ]);
+    if (pick === 'mtrash') recycleSelected();
+    else if (pick === 'mclear') setMulti([]);
+    else if (pick === 'mcopy') { api.copyText(sel.map(x => x.path).join('\r\n')); toast(`${n} paths copied`); }
+    else if (pick === 'mproj:new') newProject(sel.filter(x => !x.zip));
+    else if (pick && pick.startsWith('mproj:')) { const p = projectById(pick.slice(6)); if (p) addToProject(p, sel.filter(x => !x.zip)); }
+    return;
+  }
+  if (S.multi.size) setMulti([]);
+  S.anchor = i;
   if (S.current !== it) selectIndex(i, { play: false });
   const fav = S.favorites.has(it.path);
   const items = it.zip
@@ -863,7 +954,7 @@ listEl.addEventListener('contextmenu', async e => {
       });
     }
   }
-  items.push({ type: 'separator' }, { id: 'trash', label: 'Move to Recycle Bin' });
+  items.push({ type: 'separator' }, { id: 'trash', label: 'Move to Recycle Bin   (Del)' });
   const pick = await api.menu(items);
   if (pick === 'proj:new') { newProject([it]); return; }
   if (pick === 'proj:remove') { removeFromProject(curProj, [it.path]); return; }
@@ -1634,7 +1725,15 @@ document.addEventListener('keydown', e => {
   if (S.mode === 'online' && onlineUI.key(e, typing)) return; // list navigation, Enter, Escape in the Online tab
   const libKeys = S.mode !== 'online';
   const cur = list.selected;
-  const nav = d => { e.preventDefault(); selectIndex(Math.max(0, Math.min(S.view.length - 1, (cur < 0 ? (d > 0 ? -1 : S.view.length) : cur) + d))); };
+  const nav = d => {
+    e.preventDefault();
+    const t = Math.max(0, Math.min(S.view.length - 1, (cur < 0 ? (d > 0 ? -1 : S.view.length) : cur) + d));
+    if (e.shiftKey) { if (S.anchor < 0) S.anchor = cur < 0 ? t : cur; selectRange(S.anchor, t); }
+    else { S.anchor = t; if (S.multi.size) setMulti([]); }
+    selectIndex(t);
+  };
+  if (libKeys && !typing && e.ctrlKey && !e.altKey && k.toLowerCase() === 'a' && e.target.tagName !== 'SELECT') { e.preventDefault(); setMulti(S.view); return; }
+  if (libKeys && !typing && k === 'Delete' && e.target.tagName !== 'SELECT') { e.preventDefault(); recycleSelected(); return; }
   if (libKeys && k === 'ArrowDown') return nav(1);
   if (libKeys && k === 'ArrowUp') return nav(-1);
   if (libKeys && k === 'PageDown') return nav(list.pageSize());
@@ -1651,6 +1750,7 @@ document.addEventListener('keydown', e => {
   if (libKeys && k === 'Backspace' && !typing && browsing() && e.target.tagName !== 'SELECT') { e.preventDefault(); goUp(); return; }
   if (k === 'Escape') {
     if (libKeys && typing && e.target.value) { e.target.value = ''; S.query = ''; applyFilters(); return; }
+    if (libKeys && !typing && S.multi.size) { setMulti([]); return; }
     if (S.selection) { S.selection = null; wave.setSelection(null); } else engine.stop();
     if (typing) e.target.blur();
     return;
@@ -2152,7 +2252,7 @@ api.on('export:progress', p => {
 });
 
 // ------------------------------------------------------------------ online tab
-const LIC_INFO = { cc0: { label: 'CC0', credit: false }, pd: { label: 'Public domain', credit: false }, by: { label: 'CC BY', credit: true }, 'by-sa': { label: 'CC BY-SA', credit: true } };
+const LIC_INFO = { cc0: { label: 'CC0', credit: false }, pd: { label: 'Public domain', credit: false }, epidemic: { label: 'Epidemic', credit: false }, by: { label: 'CC BY', credit: true }, 'by-sa': { label: 'CC BY-SA', credit: true } };
 const ipcMessage = err => String((err && err.message) || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 function setDownloads(map) {

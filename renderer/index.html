@@ -32,6 +32,7 @@
           <label><input type="checkbox" value="freesound" checked><span>Freesound</span><small>600k+ sounds</small></label>
           <label><input type="checkbox" value="commons" checked><span>Wikimedia Commons</span><small>field recordings, archives</small></label>
           <label><input type="checkbox" value="archive" checked><span>Internet Archive</span><small>field recordings, packs</small></label>
+          <label><input type="checkbox" value="epidemic"><span>Epidemic Sound</span><small>your subscription</small></label>
         </div>
       </div>
       <div class="dd" id="dd-ftype">
@@ -48,7 +49,11 @@
           <div class="dd-foot"><button data-act="all">Select all</button><button data-act="lossless">Lossless only</button></div>
         </div>
       </div>
-      <span id="o-lic-note" title="Only CC0 and public-domain sounds are shown: use them in anything, including paid work, change them, no credit needed.">No credit needed · CC0 &amp; public domain</span>
+      <span id="o-lic-note" title="Only sounds you can use in anything without crediting anyone: CC0 and public domain, plus Epidemic Sound (covered by your own subscription) when it's switched on under Sources.">No credit needed</span>
+      <button id="o-epi" class="view-toggle" title="Epidemic Sound: your keys">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M8 12h8M12 8v8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+        <span>Epidemic</span>
+      </button>
       <button id="o-settings" class="view-toggle" title="Freesound API key and account (for original WAV files)">
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
         <span>Freesound</span>

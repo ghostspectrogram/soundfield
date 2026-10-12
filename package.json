@@ -1,0 +1,34 @@
+{
+  "name": "soundfield",
+  "productName": "Soundfield",
+  "version": "0.1.0",
+  "description": "Fast sound effects library explorer built for surround and immersive audio.",
+  "main": "main.js",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ghostspectrogram/soundfield.git"
+  },
+  "exports": {
+    ".": "./main.js",
+    "./probe": "./lib/probe.js",
+    "./zip": "./lib/zip.js",
+    "./region": "./lib/region.js",
+    "./pcm": "./shared/pcm.mjs",
+    "./categorize": "./shared/categorize.mjs",
+    "./layouts": "./renderer/js/layouts.js",
+    "./engine": "./renderer/js/engine.js",
+    "./sources": "./renderer/js/sources.js",
+    "./waveform": "./renderer/js/waveform.js",
+    "./speakers": "./renderer/js/speakers.js",
+    "./worklet/player.js": "./renderer/worklet/player.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "start": "electron .",
+    "icon": "node tools/make-icon.js"
+  },
+  "devDependencies": {
+    "electron": "44.7.0"
+  }
+}

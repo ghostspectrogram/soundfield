@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+<title>Soundfield</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".35"/><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".6"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/></svg>
+      <span>Soundfield</span>
+    </div>
+    <div class="search">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="search" type="search" placeholder="Search sounds…  e.g.  door wood -creak" spellcheck="false" autocomplete="off">
+      <span id="count"></span>
+    </div>
+    <div class="filters">
+      <button id="btn-folders" class="view-toggle" title="Show folders: browse folder by folder like Explorer">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" fill="none" stroke="currentColor" stroke-width="1.9"/></svg>
+        <span>Folders</span>
+      </button>
+      <div class="dd" id="dd-type">
+        <button class="dd-btn" id="dd-type-btn" aria-haspopup="true" aria-expanded="false" title="Filter by channel format (pick any number)">
+          <span class="dd-label">Sound Type</span>
+          <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="dd-menu" id="dd-type-menu" hidden>
+          <label><input type="checkbox" value="mono"><span>Mono</span></label>
+          <label><input type="checkbox" value="stereo"><span>Stereo</span><small>incl. M/S</small></label>
+          <label><input type="checkbox" value="surround"><span>Surround</span><small>LCR, Quad, 5.1, 7.1…</small></label>
+          <label><input type="checkbox" value="immersive"><span>Immersive</span><small>5.1.4, 7.1.4, 9.1.6…</small></label>
+          <label><input type="checkbox" value="ambi"><span>Ambisonic</span><small>FOA, HOA</small></label>
+          <label><input type="checkbox" value="multi"><span>Other multichannel</span></label>
+          <label><input type="checkbox" value="zip"><span>Zips</span></label>
+          <div class="dd-foot"><button data-act="all">Select all</button><button data-act="none">Clear</button></div>
+        </div>
+      </div>
+      <select id="f-sr" title="Sample rate">
+        <option value="">Any rate</option>
+        <option value="44100">44.1 kHz</option>
+        <option value="48000">48 kHz</option>
+        <option value="96000">96 kHz</option>
+        <option value="192000">192 kHz+</option>
+      </select>
+      <select id="f-dur" title="Filter by length">
+        <option value="">Any length</option>
+        <optgroup label="Seconds">
+          <option value="0-1">Under 1 s</option>
+          <option value="1-10">1 – 10 s</option>
+          <option value="10-60">10 – 60 s</option>
+        </optgroup>
+        <optgroup label="Minutes">
+          <option value="60-300">1 – 5 min</option>
+          <option value="300-600">5 – 10 min</option>
+          <option value="600-1200">10 – 20 min</option>
+          <option value="1200-">Over 20 min</option>
+        </optgroup>
+        <optgroup label="Up to">
+          <option value="0-60">Up to 1 min</option>
+          <option value="0-300">Up to 5 min</option>
+          <option value="0-600">Up to 10 min</option>
+          <option value="0-1200">Up to 20 min</option>
+        </optgroup>
+        <option value="custom">Custom range…</option>
+      </select>
+      <div id="dur-custom" class="dur-custom" hidden>
+        <input id="dur-min" type="text" placeholder="from" title="Shortest length, e.g. 30, 1:30 or 10m (empty = no minimum)" spellcheck="false">
+        <span>–</span>
+        <input id="dur-max" type="text" placeholder="to" title="Longest length, e.g. 90, 4:00 or 20m (empty = no maximum)" spellcheck="false">
+      </div>
+    </div>
+  </header>
+
+  <aside id="sidebar">
+    <div class="side-section">
+      <div class="side-item" data-scope="all"><span class="ico">≡</span><span class="lbl">All sounds</span><span class="num" id="n-all"></span></div>
+      <div class="side-item" data-scope="fav"><span class="ico">★</span><span class="lbl">Favorites</span><span class="num" id="n-fav"></span></div>
+      <div class="side-item" data-scope="dups" title="Find files with identical audio (click again to re-check)"><span class="ico">⧉</span><span class="lbl">Duplicates</span><span class="num" id="n-dup"></span></div>
+    </div>
+    <div class="side-title collapsible" id="types-title" title="Click to collapse / expand · In the list: click a category to filter, Ctrl-click to combine"><span class="st-l"><span class="chev">▾</span>Categories</span></div>
+    <div class="side-section types" id="types"></div>
+    <div id="side-split" title="Drag to resize · Double-click to reset"></div>
+    <div class="side-title collapsible" id="libs-title" title="Click to collapse / expand"><span class="st-l"><span class="chev">▾</span>Libraries</span><button id="add-lib" class="icon-btn" title="Link a folder (files stay where they are)">+</button></div>
+    <div id="lib-tree" class="tree"></div>
+    <div id="scan-status"></div>
+  </aside>
+
+  <main id="center">
+    <div id="crumbs" hidden></div>
+    <div id="list-header" class="row header">
+      <div class="c-fav"></div>
+      <div class="c-name" data-sort="name">Name</div>
+      <div class="c-fmt" data-sort="fmt">Format</div>
+      <div class="c-type" data-sort="type">Category</div>
+      <div class="c-ch" data-sort="ch">Ch</div>
+      <div class="c-dur" data-sort="dur">Length</div>
+      <div class="c-sr" data-sort="sr">Rate</div>
+      <div class="c-bits" data-sort="bits">Bits</div>
+      <div class="c-desc" data-sort="desc">Description</div>
+      <div class="c-lib" data-sort="lib">Folder</div>
+    </div>
+    <div id="dup-banner" hidden></div>
+    <div id="dup-excluded" hidden></div>
+    <div id="list"></div>
+    <div id="dup-chooser" hidden>
+      <div class="dup-card">
+        <h2>Find duplicates</h2>
+        <p>How should Soundfield decide two files are the same?</p>
+        <div class="dup-options">
+          <button class="dup-opt" data-mode="audio">
+            <span class="dup-ico">〰</span>
+            <b>Same audio</b>
+            <span>Identical sound, even if the files were renamed or re-tagged. Reads the candidate files from disk, so large libraries take a moment.</span>
+          </button>
+          <button class="dup-opt" data-mode="name">
+            <span class="dup-ico">Aa</span>
+            <b>Same name</b>
+            <span>Files that share a name, ignoring upper/lower case and extension (.wav, .flac…). Instant, but same-named files may sound different.</span>
+          </button>
+        </div>
+        <p class="dup-tip">Tip: right-click a folder under Libraries → <i>Exclude from duplicate search</i> to leave it out.</p>
+      </div>
+    </div>
+    <div id="empty" hidden>
+      <div class="empty-card">
+        <div class="empty-ring"></div>
+        <h2>Link your sound libraries</h2>
+        <p>Point Soundfield at the folders where your sounds live. Nothing is copied or moved: only audio files are indexed, right where they are.</p>
+        <button id="empty-add" class="primary">Add library folder</button>
+      </div>
+    </div>
+  </main>
+
+  <div id="splitter" title="Drag to resize"></div>
+
+  <section id="player">
+    <div id="transport">
+      <button id="btn-play" class="tbtn big" title="Play / Stop (Space)">
+        <svg class="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="currentColor"/></svg>
+        <svg class="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-loop" class="tbtn toggle" title="Loop (L)">
+        <svg viewBox="0 0 24 24"><path d="M17 2l3 3-3 3M4 11V9a4 4 0 014-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 01-4 4H4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="btn-auto" class="tbtn toggle" title="Auto-play when moving through the list with the ↑ / ↓ keys (A). Clicking never auto-plays; double-click to play.">AUTO</button>
+      <div id="time"><span id="t-pos">0:00.000</span><span class="sep">/</span><span id="t-dur">0:00.000</span></div>
+
+      <div class="vol" title="Preview level: set it before you hit play. Double-click resets to 0 dB. Keys: - / =">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor"/><path id="vol-waves" d="M16 8.5a5 5 0 010 7M18.5 6a8.5 8.5 0 010 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <input id="volume" type="range" min="-60" max="12" step="0.5" value="0">
+        <span id="vol-db">0.0 dB</span>
+      </div>
+
+      <div class="spacer"></div>
+
+      <label class="sel-wrap" title="How multichannel files are monitored">
+        <span>Monitor</span>
+        <select id="monitor">
+          <option value="stereo">Stereo (Lo/Ro)</option>
+          <option value="binaural">Binaural (HRTF)</option>
+          <option value="discrete">Discrete outputs</option>
+        </select>
+      </label>
+      <button id="btn-lfe" class="tbtn toggle small" title="Include LFE in stereo / binaural monitoring">LFE</button>
+      <label class="sel-wrap" title="Channel layout of this file">
+        <span>Layout</span>
+        <select id="layout-sel"></select>
+      </label>
+      <div id="drag-handle" draggable="true" title="Drag this file (or the selection) into your DAW">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <span>Drag to DAW</span>
+      </div>
+      <button id="btn-reveal" class="tbtn small" title="Show in Explorer">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </button>
+    </div>
+
+    <div id="wave-area">
+      <div id="lanes">
+        <div id="ruler-spacer"></div>
+        <div id="lanes-labels"></div>
+      </div>
+      <div id="wave-wrap">
+        <canvas id="ruler"></canvas>
+        <canvas id="wave"></canvas>
+        <div id="sel" title="Click: play selection · Drag: drop it into your DAW"></div>
+        <div id="hover"></div>
+        <div id="playhead"></div>
+        <div id="zip-panel" hidden></div>
+      </div>
+      <div id="side-panel">
+        <canvas id="speakers"></canvas>
+        <div id="file-meta"></div>
+      </div>
+    </div>
+  </section>
+</div>
+<div id="toast"></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -4,6 +4,7 @@
 //   Website search:    sound sites that open your search in the browser, because
 //                      they don't let other apps search them.
 import { VList } from './vlist.js';
+import { KEYS, keyIndex } from '../../shared/categorize.mjs';
 
 const enc = encodeURIComponent;
 const slug = q => q.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -138,6 +139,45 @@ export function createOnline(ctx) {
     } else if (pick && pick[0] === 'r') setSaveDir(live[Number(pick.slice(1))]);
   });
 
+  // ---------------------------------------------------------------- Sound effects / Music
+  // Music searches the same free sites for CC0 / public-domain music, with Key and BPM columns.
+  // Epidemic Sound and Team SFX are sound effects only here.
+  const music = () => prefs.onlineKind === 'music';
+  const SFX_ONLY = ['epidemic', 'teamsfx'];
+  const MO = { bpm: null, key: '' }; // Music filters (this session)
+  function applyKind() {
+    const m = music();
+    document.querySelectorAll('#o-kinds [data-okind]').forEach(b => b.classList.toggle('on', (b.dataset.okind === 'music') === m));
+    $('#online').classList.toggle('music', m);
+    $('#o-music-filters').hidden = !m;
+    srcMenu.querySelectorAll('input').forEach(i => { if (SFX_ONLY.includes(i.value)) i.closest('label').classList.toggle('off', m); });
+  }
+  $('#o-kinds').addEventListener('click', e => {
+    const b = e.target.closest('[data-okind]');
+    if (!b || (b.dataset.okind === 'music') === music()) return;
+    prefs.onlineKind = b.dataset.okind;
+    savePrefs();
+    applyKind();
+    applyOMode();
+    if (O.query) runSearch(true);
+  });
+  $('#o-key').insertAdjacentHTML('beforeend', [['Major', KEYS.slice(0, 12)], ['Minor', KEYS.slice(12)]]
+    .map(([label, ks]) => `<optgroup label="${label}">${ks.map(k => `<option value="${k}">${k}</option>`).join('')}</optgroup>`).join(''));
+  $('#o-key').addEventListener('change', e => { MO.key = e.target.value; render(); });
+  $('#o-bpm').addEventListener('input', e => {
+    const s = e.target.value.trim();
+    let r = null, m;
+    if ((m = /^(\d{2,3})$/.exec(s))) r = [Number(m[1]) - 2, Number(m[1]) + 2];
+    else if ((m = /^(\d{2,3})?\s*[-–]\s*(\d{2,3})?$/.exec(s)) && (m[1] || m[2])) r = [Number(m[1] || 0), m[2] ? Number(m[2]) : Infinity];
+    else if ((m = /^(\d{2,3})\+$/.exec(s))) r = [Number(m[1]), Infinity];
+    const bad = !!s && !r;
+    e.target.classList.toggle('bad', bad);
+    if (bad) return;
+    MO.bpm = r;
+    render();
+  });
+  const passesMusic = r => (!MO.bpm || (r.bpm >= MO.bpm[0] && r.bpm <= MO.bpm[1])) && (!MO.key || r.mkey === MO.key);
+
   // ---------------------------------------------------------------- Soundfield search / Website search
   const web = () => prefs.onlineMode === 'web';
   function setOMode(m) {
@@ -151,8 +191,10 @@ export function createOnline(ctx) {
     document.querySelectorAll('#o-modes [data-omode]').forEach(b => b.classList.toggle('on', (b.dataset.omode === 'web') === w));
     $('#o-mode-hint').textContent = w
       ? 'Sound sites that open your search in your browser. Hover a site for its licence terms.'
-      : 'Sounds you can preview here and save straight into Soundfield, no credit needed: CC0, public domain, and Epidemic Sound through your subscription.';
-    input.placeholder = w ? 'Search sound sites…  e.g.  bees' : 'Search free sound effects, then press Enter…  e.g.  bees';
+      : music()
+        ? 'CC0 and public-domain music you can preview and save, no credit needed. Saved music goes in a Music folder and is sorted as Musical.'
+        : 'Sounds you can preview here and save straight into Soundfield, no credit needed: CC0, public domain, and Epidemic Sound through your subscription.';
+    input.placeholder = w ? 'Search sound sites…  e.g.  bees' : music() ? 'Search free music, then press Enter…  e.g.  lofi piano' : 'Search free sound effects, then press Enter…  e.g.  bees';
     $('#o-web').hidden = !w;
     $('#o-header').hidden = w;
     listEl.hidden = w;
@@ -193,8 +235,8 @@ export function createOnline(ctx) {
     const q = reset ? input.value.trim() : O.query;
     if (!q) return;
     if (O.loading && !reset) return;
-    const srcs = reset ? sources() : Object.keys(O.more).filter(k => O.more[k]);
-    if (!srcs.length) { if (reset) toast('Pick at least one source (Sources ▾).'); return; }
+    const srcs = (reset ? sources() : Object.keys(O.more).filter(k => O.more[k])).filter(s => !music() || !SFX_ONLY.includes(s));
+    if (!srcs.length) { if (reset) toast(music() ? 'Pick Freesound, Wikimedia Commons or Internet Archive for music (Sources ▾).' : 'Pick at least one source (Sources ▾).'); return; }
     if (!fileTypes().length) { if (reset) toast('Pick at least one file type (File type ▾).'); return; }
     if (reset) {
       Object.assign(O, { query: q, page: 1, results: [], seen: new Set(), more: {}, errors: {}, totals: {} });
@@ -212,7 +254,7 @@ export function createOnline(ctx) {
     render();
     await Promise.all(srcs.map(async src => {
       let res = null;
-      try { res = await api.online.search({ query: q, page, sources: [src], licenses: ['cc0', 'pd'], types }); }
+      try { res = await api.online.search({ query: q, page, sources: [src], licenses: ['cc0', 'pd'], types, kind: music() ? 'music' : 'sfx' }); }
       catch (err) { if (tok === O.tok) O.errors[src] = ipcMessage(err); }
       if (tok !== O.tok) return;
       O.pending.delete(src);
@@ -223,7 +265,7 @@ export function createOnline(ctx) {
         Object.assign(O.errors, res.errors);
         O.via = res.via;
         const fresh = res.results.filter(r => !O.seen.has(r.key));
-        for (const r of fresh) O.seen.add(r.key);
+        for (const r of fresh) { O.seen.add(r.key); r.keyIdx = r.mkey ? keyIndex(r.mkey) : 99; }
         lists[src] = fresh;
         if (list.selected >= 0 || listEl.scrollTop > 0) settled = true;
         if (settled) O.results.push(...fresh);
@@ -241,9 +283,10 @@ export function createOnline(ctx) {
   const anyMore = () => Object.values(O.more).some(Boolean);
 
   function sorted() {
-    if (!O.sort) return O.results.slice();
+    const list = music() && (MO.bpm || MO.key) ? O.results.filter(passesMusic) : O.results;
+    if (!O.sort) return list.slice();
     const { key, dir } = O.sort;
-    return O.results.slice().sort((a, b) => {
+    return list.slice().sort((a, b) => {
       const x = a[key], y = b[key];
       return (typeof x === 'number' ? x - y : collator.compare(String(x || ''), String(y || ''))) * dir;
     });
@@ -296,7 +339,7 @@ export function createOnline(ctx) {
 
   function renderRow(row, r) {
     if (!row._built) {
-      row.innerHTML = '<div class="c-name"></div><div class="c-src"></div><div class="c-lic"></div><div class="c-dur"></div><div class="c-ofmt"></div><div class="c-by"></div><div class="c-act"></div>';
+      row.innerHTML = '<div class="c-name"></div><div class="c-src"></div><div class="c-lic"></div><div class="c-dur"></div><div class="c-key"></div><div class="c-bpm"></div><div class="c-ofmt"></div><div class="c-by"></div><div class="c-act"></div>';
       row.draggable = true;
       row._built = true;
       row._c = [...row.children];
@@ -317,11 +360,14 @@ export function createOnline(ctx) {
     c[2].innerHTML = `<span class="lic ${escapeHtml(r.license)}">${escapeHtml(li.label)}</span>`;
     c[2].title = r.source === 'teamsfx' ? [r.licenseText && `Licence: ${r.licenseText}`, r.credits && `Credits: ${r.credits}`, !r.licenseText && !r.credits && 'No CREDITS.txt in this folder'].filter(Boolean).join('\n') : LIC_TIPS[r.license] || '';
     c[3].textContent = r.duration ? fmtTime(r.duration) : '';
-    c[4].textContent = fmtFormat(r);
-    c[5].textContent = r.creator || '';
-    c[5].title = r.creator || '';
+    const est = (v, isEst) => (!v ? '' : isEst ? `<span class="est" title="The site's own estimate">≈ ${escapeHtml(String(v))}</span>` : escapeHtml(String(v)));
+    c[4].innerHTML = est(r.mkey, r.keyEst);
+    c[5].innerHTML = est(r.bpm, r.bpmEst);
+    c[6].textContent = fmtFormat(r);
+    c[7].textContent = r.creator || '';
+    c[7].title = r.creator || '';
     const p = O.progress.get(r.key);
-    c[6].innerHTML = dl
+    c[8].innerHTML = dl
       ? '<button class="o-save done" title="Show in Explorer">✓ Saved</button>'
       : p
         ? `<button class="o-save busy">${p.total ? Math.round((p.got / p.total) * 100) + '%' : '…'}</button>`
@@ -666,6 +712,7 @@ export function createOnline(ctx) {
   let refreshQueued = false;
   return {
     show() {
+      applyKind();
       applyOMode();
       refreshSettings();
       refreshEpi();

@@ -129,6 +129,7 @@ Anything that copies, deletes or downloads a lot says how big it is before it st
 - Linking a whole drive, the Windows folder, Program Files, an app-data folder or your user folder asks first. The "same audio" duplicate search says how much it may read from disk, and can be cancelled.
 
 ## Libraries
+- The total size of all your libraries is shown next to *Libraries*; hover a library for its own sound count and size.
 - Click **+** next to *Libraries* to link a folder. Files are never copied or moved; only audio files are indexed (WAV/BWF/RF64, AIFF/AIFC, FLAC, MP3, OGG/Opus, M4A).
 - Library folders are watched: sounds added, renamed or deleted show up within a few seconds. On launch, libraries also quietly rescan in the background. Only new or changed files are re-read.
 - Long MP3 and FLAC files (2 minutes and up) are decoded about 10 seconds at a time, so even hour-long recordings use little memory.
@@ -149,6 +150,7 @@ Virtual project folders: a project holds *references* to sounds. Nothing is move
 ## Online
 Click **Online** (next to *Library* at the top). It has two modes, switched under the search bar:
 - **Soundfield search** shows only sounds you can preview and save straight into Soundfield, and only attribution-free ones (CC0 and public domain) that you can use in anything, including paid and commercial work, with no credit needed.
+- **Sound effects / Music** (next to the mode switch): *Music* searches the same free sites for CC0 and public-domain music instead. Freesound results are limited to its Music category (with a free Freesound key; without one, results are kept to music-looking titles and tags), Wikimedia Commons to recordings in music categories, and Internet Archive to music uploads. Results get **Key** and **BPM** columns (sortable) from their titles and tags, or from Freesound's own analysis (marked ≈), plus BPM and key filters. Saved music goes into `Soundfield DownloadsMusic<Source>` and is always sorted as Musical. Epidemic Sound and Team SFX are sound effects only here.
 - **Website search** lists sound sites, grouped as free, subscription and not-for-commercial-work, each with a badge for its terms. Clicking one opens your search on that site in your browser (signed in as you).
 
 ### Soundfield search
@@ -211,7 +213,11 @@ Like Windows Explorer: drag the divider at the right edge of a column header to 
 Sounds are sorted into the top-level categories Epidemic Sound uses (the UCS standard: Air, Aircraft, Alarms … Wings, Wood, 77 in all; no Farts), plus **Background**, **Room tone** and **Voice**. Epidemic's *Ambience* is Background and *Voices* is Voice. The category is decided by, in order:
 1. **Your choice.** Right-click → **Category** → pick one. This always wins (✎ marks it). *Automatic* undoes it.
 2. **The file name, then its description, then its folders.** UCS CatIDs (`DOORWood_…`, `EXPLReal_…`, `AMBRoom_…`) map directly. Otherwise keywords are matched in a deliberate order, so *Car Door* → Vehicles, *Wooden Door* → Doors, *Laser Gun* → Lasers, *Nail Gun* → Tools, *Tap Running* → Water, *Tire Scream* → Vehicles.
-3. **Listening.** Files whose names say nothing are analysed in the background, using up to ~9 s of audio per file and caching the result. Listening can recognise Room tone, Background, Voice, Footsteps and Musical. Other one-shots can't be told apart by ear (a door vs. a metal hit), so they stay **Unsorted** for you to set. MP3, FLAC, OGG and M4A files are sorted by name only.
+3. **Listening.** Files whose names say nothing are analysed in the background, using up to ~9 s of audio per file and caching the result. Listening can recognise Room tone, Background, Voice, Footsteps and Musical. Musical needs a steady beat and an even level; being tonal alone isn't enough (most recordings are), so dialogue, drones and tones aren't called music. Other one-shots can't be told apart by ear (a door vs. a metal hit), so they stay **Unsorted** for you to set. MP3, FLAC, OGG and M4A files are sorted by name only.
+
+Folder names count closest folder first, so a *Doors* folder inside a *Voiceover* folder holds doors. Epidemic music saved as `ES_<title> - <artist>` is Musical; instrument words (*piano*, *choir*, *cymbal*…) only decide when nothing more specific does, so a *Cymbal Whoosh* is a whoosh.
+
+**Music: Key and BPM.** With **Musical** picked (and only then), the list gets **Key** and **BPM** columns (sortable) and *BPM* / *Key* filters at the top: type `120` (give or take 2), `90-110` or `140+`. They come from the name, description or folders (`Loop Am 95bpm`, `F#min 110bpm`, `B Minor`), or from what the sound was saved with, or by ear: music files are listened to for 30 s from the middle (marked ≈). A tempo is only guessed when there's a beat, and a key only when the music clearly has one. Epidemic files (`ES_…`) and folders whose `CREDITS.txt` mentions Epidemic are never listened to.
 
 The sidebar lists the categories that have sounds. Click one to filter (Ctrl-click to combine). The **Category** column is sortable, and typing a category name in search also works. Right-click a category → **Add all N to project ▸** to put every sound in it into a project (or a new one). When a search or filter is narrowing the list, **Add the N listed to project** adds just those.
 

@@ -2,6 +2,18 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.9',
+    date: '2026-10-13',
+    items: [
+      'Far fewer sounds wrongly sorted as Musical. Dialogue recordings, tones, drones and rumbles aren’t called music any more; music now needs a steady beat. Your existing sounds are re-sorted in the background.',
+      'Better sorting by name: Epidemic music (ES_… - artist) is Musical, folder names count closest folder first (so a Doors folder inside a Voiceover folder holds doors), and a Cymbal Whoosh is a whoosh.',
+      'Music gets Key and BPM: pick Musical in the sidebar to see Key and BPM columns (click to sort) and BPM / Key filters at the top. They come from file names, or by ear for music files (marked ≈).',
+      'Online → Music: search Freesound, Wikimedia Commons and Internet Archive for CC0 / public-domain music, with Key and BPM columns and filters. Saved music goes into a Music folder and is sorted as Musical.',
+      'The total size of your libraries is shown next to Libraries (hover a library for its own size).',
+      'Epidemic files (ES_…) and folders whose CREDITS.txt mentions Epidemic are never listened to.',
+    ],
+  },
+  {
     version: '0.2.0-beta.8',
     date: '2026-10-13',
     items: [

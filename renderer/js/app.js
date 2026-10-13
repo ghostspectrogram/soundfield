@@ -7,7 +7,7 @@ import { createSettings } from './settings.js';
 import { SpectroFeeder } from './spectro.js';
 import { createSource } from './sources.js';
 import { detectLayout, layoutChoices } from './layouts.js';
-import { metaCategory, TYPES, TYPE_LABELS } from '../../shared/categorize.mjs';
+import { metaCategory, musicFromName, keyIndex, KEYS, TYPES, TYPE_LABELS } from '../../shared/categorize.mjs';
 import { RELEASES, unseenReleases } from './whats-new.js';
 import SAFETY_DEFAULTS from '../../shared/safety.json' with { type: 'json' };
 import { loudnessWeights } from '../../shared/loudness.mjs';
@@ -145,11 +145,26 @@ function assignType(it) {
     let ov = S.typeOverrides[it.path];
     if (ov === 'music') ov = 'musical'; // from before the category list changed
     if (!TYPE_LABELS[ov]) ov = null;
-    let heard = (S.analysis[it.lib.id] || {})[it.rec.rel];
+    const v = (S.analysis[it.lib.id] || {})[it.rec.rel];
+    let heard = Array.isArray(v) ? v[0] : v; // [category, bpm, key] for music
     if (!TYPE_LABELS[heard]) heard = null;
+    const dl = S.downloadsByPath && S.downloadsByPath.get(lowPath(it.path));
     if (ov) { type = ov; src = 'you'; }
     else if (it.metaType) { type = it.metaType; src = 'name'; }
+    else if (dl && dl.kind === 'music') { type = 'musical'; src = 'name'; } // saved from a Music search
     else if (heard) { type = heard; src = 'audio'; }
+    // Tempo and key, for music only: from the name, the site it came from, or by ear (≈).
+    it.music = null;
+    if (type === 'musical') {
+      const m = musicFromName(it.rec.rel, it.rec.desc);
+      const ear = Array.isArray(v) ? v : [];
+      const site = dl && dl.kind === 'music' ? dl : {};
+      it.music = {
+        bpm: m.bpm || site.bpm || ear[1] || 0, key: m.key || site.mkey || ear[2] || '',
+        bpmEst: m.bpm ? false : site.bpm ? !!site.bpmEst : !!ear[1],
+        keyEst: m.key ? false : site.mkey ? !!site.keyEst : !!ear[2],
+      };
+    }
   }
   it.type = type || 'unsorted';
   it.typeSrc = src;
@@ -222,6 +237,8 @@ function applyFilters({ keepScroll = false } = {}) {
   if (S.dur) { const [a, b] = S.dur.split('-'); dmin = Number(a); dmax = b ? Number(b) : Infinity; }
   // Folder browsing: subfolders + this folder's own sounds. Any search or filter
   // looks through everything inside the current folder instead, like Explorer.
+  setMusicView(S.types.size === 1 && S.types.has('musical'));
+  const bpmR = S.musicView && S.bpm ? S.bpm : null, keyF = S.musicView ? S.key : '';
   const searching = !!(ps.terms.length || ps.exc.length || mineFilter || cls.size || S.types.size || sr || S.dur);
   const browse = browsing() && !searching;
   const out = [], loose = []; // loose: found through a synonym or a typo, listed after exact matches
@@ -245,6 +262,8 @@ function applyFilters({ keepScroll = false } = {}) {
       if (!it.zip) {
         if (sr && (sr === 192000 ? it.rec.sr < 176400 : it.rec.sr !== sr)) continue;
         if (S.dur && !(it.rec.dur >= dmin && it.rec.dur <= dmax)) continue;
+        if (bpmR && !(it.music && it.music.bpm >= bpmR[0] && it.music.bpm <= bpmR[1])) continue;
+        if (keyF && !(it.music && it.music.key === keyF)) continue;
       } else if (sr || S.dur) continue;
       if (mineFilter) {
         const e = S.mine.sounds[it.path], r = (e && e.r) || 0;
@@ -315,6 +334,8 @@ function sortItems(arr) {
     desc: (a, b) => collator.compare(a.rec.desc || '￿', b.rec.desc || '￿'),
     lib: (a, b) => collator.compare(a.lib.name + '/' + a.folder, b.lib.name + '/' + b.folder) || collator.compare(a.name, b.name),
     rate: (a, b) => ratingOf(a) - ratingOf(b),
+    key: (a, b) => (a.music && a.music.key ? keyIndex(a.music.key) : 99) - (b.music && b.music.key ? keyIndex(b.music.key) : 99),
+    bpm: (a, b) => ((a.music && a.music.bpm) || 0) - ((b.music && b.music.bpm) || 0),
   }[key] || ((a, b) => collator.compare(a.name, b.name));
   arr.sort((a, b) => by(a, b) * dir || collator.compare(a.name, b.name));
   document.querySelectorAll('#list-header [data-sort]').forEach(h => {
@@ -442,7 +463,7 @@ function renderMissingRow(row, it) {
 // ------------------------------------------------------------------ list rows
 function renderRow(row, it) {
   if (!row._built) {
-    row.innerHTML = '<div class="c-fav"><span class="star">★</span></div><div class="c-name"></div><div class="c-fmt"><span class="fmt"></span></div><div class="c-type"></div><div class="c-ch"></div><div class="c-dur"></div><div class="c-sr"></div><div class="c-bits"></div><div class="c-desc"></div><div class="c-lib"></div><div class="c-rate"></div>';
+    row.innerHTML = '<div class="c-fav"><span class="star">★</span></div><div class="c-name"></div><div class="c-fmt"><span class="fmt"></span></div><div class="c-type"></div><div class="c-ch"></div><div class="c-dur"></div><div class="c-sr"></div><div class="c-bits"></div><div class="c-desc"></div><div class="c-lib"></div><div class="c-rate"></div><div class="c-key"></div><div class="c-bpm"></div>';
     row.draggable = true;
     row._built = true;
     row._c = [...row.children];
@@ -493,6 +514,9 @@ function renderRow(row, it) {
   c[8].title = r.desc || '';
   c[9].textContent = it.folder ? `${it.lib.name} / ${it.folder}` : it.lib.name;
   c[9].title = c[9].textContent;
+  const m = it.music;
+  c[11].innerHTML = m && m.key ? (m.keyEst ? `<span class="est" title="Worked out by ear">≈ ${m.key}</span>` : m.key) : '';
+  c[12].innerHTML = m && m.bpm ? (m.bpmEst ? `<span class="est" title="Worked out by ear">≈ ${m.bpm}</span>` : String(m.bpm)) : '';
 }
 
 function fmtBytes(n) {
@@ -1559,6 +1583,8 @@ const COLS = [
   { key: 'rate', w: 84, min: 70 },
   { key: 'fmt', w: 78, min: 56 },
   { key: 'type', w: 120, min: 60 },
+  { key: 'key', w: 62, min: 46, music: true },
+  { key: 'bpm', w: 62, min: 46, music: true },
   { key: 'ch', w: 44, min: 34 },
   { key: 'dur', w: 74, min: 50 },
   { key: 'sr', w: 62, min: 44 },
@@ -1569,8 +1595,10 @@ const COLS = [
 prefs.cols = Object.assign({}, prefs.cols);
 const colWidth = c => (c.fixed ? c.w : Math.max(c.min, prefs.cols[c.key] || c.w));
 
+// Key and BPM are only shown while the Musical category is picked.
+const shownCols = () => COLS.filter(c => !c.music || S.musicView);
 function applyCols() {
-  const widths = COLS.map(colWidth);
+  const widths = shownCols().map(colWidth);
   const center = $('#center');
   center.style.setProperty('--cols', widths.map(w => w + 'px').join(' '));
   center.style.setProperty('--row-w', widths.reduce((a, b) => a + b, 0) + 8 + 'px');
@@ -1588,6 +1616,8 @@ const colText = {
   desc: it => it.rec.desc || '',
   lib: it => (it.folder ? `${it.lib.name} / ${it.folder}` : it.lib.name),
   rate: () => '★★★★★',
+  key: it => (it.music && it.music.key ? '≈ ' + it.music.key : ''),
+  bpm: it => (it.music && it.music.bpm ? '≈ ' + it.music.bpm : ''),
 };
 const colExtra = { fmt: 18, type: 16 }; // badge padding / colour dot
 const measureCtx = document.createElement('canvas').getContext('2d');
@@ -1730,6 +1760,36 @@ function applyCustomLength() {
   applyFilters();
 }
 $('#f-rating').addEventListener('change', e => { S.rating = e.target.value; applyFilters(); });
+
+// Music: Key / BPM columns and filters appear only while the Musical category is picked,
+// so sound effect lists stay as they were.
+function setMusicView(on) {
+  if (!!S.musicView === on) return;
+  S.musicView = on;
+  $('#center').classList.toggle('music-view', on);
+  $('#music-filters').hidden = !on;
+  applyCols();
+}
+$('#f-key').insertAdjacentHTML('beforeend', [['Major', KEYS.slice(0, 12)], ['Minor', KEYS.slice(12)]]
+  .map(([label, ks]) => `<optgroup label="${label}">${ks.map(k => `<option value="${k}">${k}</option>`).join('')}</optgroup>`).join(''));
+$('#f-key').addEventListener('change', e => { S.key = e.target.value; applyFilters(); });
+// "120" means 118–122; "90-110" or "90 – 110" a range; "140+" and "-100" open-ended.
+function parseBpm(s) {
+  s = s.trim();
+  if (!s) return null;
+  let m = /^(\d{2,3})$/.exec(s);
+  if (m) return [Number(m[1]) - 2, Number(m[1]) + 2];
+  m = /^(\d{2,3})?\s*[-–]\s*(\d{2,3})?$/.exec(s) || /^(\d{2,3})(\+)$/.exec(s);
+  if (!m || (!m[1] && !m[2])) return undefined;
+  return [m[1] ? Number(m[1]) : 0, m[2] && m[2] !== '+' ? Number(m[2]) : Infinity];
+}
+$('#f-bpm').addEventListener('input', e => {
+  const r = parseBpm(e.target.value);
+  e.target.classList.toggle('bad', r === undefined);
+  if (r === undefined) return;
+  S.bpm = r;
+  applyFilters();
+});
 $('#f-dur').addEventListener('change', e => {
   const custom = e.target.value === 'custom';
   $('#dur-custom').hidden = !custom;
@@ -1760,6 +1820,14 @@ function buildTree(recs) {
     }
   }
   return root;
+}
+
+// Total size of a library's sounds (zips count whole), kept until its index changes.
+const bytesCache = new WeakMap();
+function libBytes(id) {
+  const recs = S.recs[id] || [];
+  if (!bytesCache.has(recs)) bytesCache.set(recs, recs.reduce((t, r) => t + (r.size || 0), 0));
+  return bytesCache.get(recs);
 }
 
 function renderTree() {
@@ -1802,15 +1870,20 @@ function renderTree() {
       if (row(hid, depth, k.name, k.count, key, { type: 'folder', lib: lib.id, prefix: k.path }, k.children.size > 0, exclMark(lib, k.path) + hideMark(lib, k.path))) walk(lib, k, depth + 1);
     }
   };
+  let allBytes = 0;
   for (const lib of S.libs) {
     const tree = S.trees.get(lib.id) || { children: new Map(), count: 0 };
     const scanning = S.scans.has(lib.id);
     const extra = exclMark(lib, '') + hideMark(lib, '') + (scanning ? '<span class="spin" title="Scanning"></span>' : '') + (lib.offline ? '<span class="badge-off" title="Folder not reachable">offline</span>' : '');
     const key = lib.id + ':';
     const open = row('lib' + (lib.offline ? ' offline' : '') + (folderHidden(lib.id, '') ? ' hidden-folder' : ''), 0, lib.name, tree.count, key, { type: 'folder', lib: lib.id, prefix: '' }, tree.children.size > 0, extra);
+    const bytes = libBytes(lib.id);
+    allBytes += bytes;
+    frag.lastChild.title = `${lib.path}\n${tree.count.toLocaleString()} sounds · ${fmtBytes(bytes)}`;
     if (open) walk(lib, tree, 1);
   }
   el.replaceChildren(frag);
+  $('#libs-size').textContent = S.libs.length ? fmtBytes(allBytes) : '';
   document.querySelectorAll('.side-item[data-scope]').forEach(s => s.classList.toggle('active', s.dataset.scope === sc.type));
 }
 
@@ -2550,6 +2623,11 @@ function clearAllFilters() {
   $('#dur-custom').hidden = true;
   S.rating = '';
   $('#f-rating').value = '';
+  S.bpm = null;
+  S.key = '';
+  $('#f-bpm').value = '';
+  $('#f-bpm').classList.remove('bad');
+  $('#f-key').value = '';
   if (S.classes.size) $('#dd-type-menu [data-act="none"]').click(); // also redraws the Sound Type button
   applyFilters();
 }

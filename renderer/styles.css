@@ -157,6 +157,7 @@ body.col-resizing, body.col-resizing * { cursor: col-resize !important; }
 /* Custom length range */
 .dur-custom { display: flex; align-items: center; gap: 4px; color: var(--dim); }
 .dur-custom[hidden] { display: none; }
+#music-filters input { width: 74px; }
 .dur-custom input {
   width: 58px; height: 28px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--line);
   background: var(--bg); color: var(--text); font-size: 12.5px; outline: none; user-select: text;
@@ -300,6 +301,7 @@ select option { color: var(--text); }
 .side-title.collapsible { cursor: pointer; user-select: none; }
 .side-title.collapsible:hover { color: var(--muted); }
 .side-title .st-l { display: flex; align-items: center; gap: 5px; }
+#libs-size { margin: 0 8px 0 auto; font-weight: 500; letter-spacing: .2px; text-transform: none; font-variant-numeric: tabular-nums; }
 .side-title .chev { display: inline-block; width: 10px; font-size: 10px; transition: transform .12s; }
 #sidebar.types-collapsed #types-title .chev, #sidebar.libs-collapsed #libs-title .chev { transform: rotate(-90deg); }
 #sidebar.types-collapsed #types { display: none; }
@@ -514,6 +516,11 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 #online { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
 #online[hidden] { display: none; }
 #online .row { grid-template-columns: minmax(220px, 1fr) 140px 118px 66px 128px minmax(110px, 200px) 92px; width: 100%; padding-right: 6px; }
+#online.music .row { grid-template-columns: minmax(220px, 1fr) 140px 118px 66px 56px 56px 128px minmax(110px, 200px) 92px; }
+#online:not(.music) :is(.c-key, .c-bpm) { display: none; }
+#o-music-filters input { width: 74px; }
+.dd-menu label.off { opacity: .45; } /* sound effects only: skipped by Music searches */
+#app.web-search #o-kinds, #app.web-search #o-music-filters { display: none; }
 #o-modes { flex: none; display: flex; align-items: center; gap: 12px; padding: 7px 14px; border-bottom: 1px solid var(--line); background: var(--panel); font-size: 12px; color: var(--dim); }
 .seg { display: flex; flex: none; padding: 2px; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 .seg button { height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; }
@@ -674,6 +681,11 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 #list .row > .c-fav, #list-header > .c-fav { order: 0; }
 #list .row > .c-name, #list-header > .c-name { order: 1; }
 #list .row > .c-rate, #list-header > .c-rate { order: 2; }
+/* Key and BPM (music only) are last in each row's markup too; they sit right after the category. */
+#list .row > :is(.c-key, .c-bpm), #list-header > :is(.c-key, .c-bpm) { order: 4; }
+#list .row > :is(.c-ch, .c-dur, .c-sr, .c-bits, .c-desc, .c-lib), #list-header > :is(.c-ch, .c-dur, .c-sr, .c-bits, .c-desc, .c-lib) { order: 5; }
+#center:not(.music-view) :is(.c-key, .c-bpm) { display: none; }
+.c-key .est, .c-bpm .est { color: var(--dim); }
 .stars { display: inline-flex; gap: 1px; letter-spacing: 0; white-space: nowrap; }
 .stars .rs { cursor: pointer; color: #3a4250; font-size: 12px; line-height: 1; padding: 0 1px; }
 .stars .rs.on { color: var(--warn); }

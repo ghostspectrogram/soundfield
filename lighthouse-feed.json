@@ -39,5 +39,9 @@
   {"id": "sharp-spectrogram", "title": "Sharper spectrograms", "summary": "Short sounds and zoomed-in views get a spectrogram column per screen pixel, with smooth low frequencies.", "date": "2026-10-13"},
   {"id": "team-sfx-source", "title": "Team SFX in Soundfield", "summary": "Search, preview and save sounds from the shared Team SFX library in the Online tab, with each folder licence and credits shown.", "date": "2026-10-13"},
   {"id": "team-sfx-upload", "title": "Add sounds to Team SFX from Soundfield", "summary": "Right-click library sounds to upload them into a Team SFX folder, with optional credits for that folder.", "date": "2026-10-13"},
-  {"id": "data-backups", "title": "Automatic backups of your Soundfield data", "summary": "Projects, favorites, notes, ratings, markers and settings are backed up daily with old backups cleaned up, and can be restored with undo.", "date": "2026-10-13"}
+  {"id": "data-backups", "title": "Automatic backups of your Soundfield data", "summary": "Projects, favorites, notes, ratings, markers and settings are backed up daily with old backups cleaned up, and can be restored with undo.", "date": "2026-10-13"},
+  {"id": "music-sorting-fix", "title": "More accurate Musical category", "summary": "Listening only calls a sound music when it has a steady beat, so dialogue, tones and drones stay out; Epidemic music and folder names are read more carefully.", "date": "2026-10-13"},
+  {"id": "music-key-bpm", "title": "Key and BPM for music", "summary": "The Musical category shows sortable Key and BPM columns with filters, read from file names or worked out by ear.", "date": "2026-10-13"},
+  {"id": "online-music-search", "title": "Search free music online", "summary": "Online has a Music mode for CC0 and public-domain music from Freesound, Wikimedia Commons and Internet Archive, with key and tempo.", "date": "2026-10-13"},
+  {"id": "library-size", "title": "Library size at a glance", "summary": "The total size of all linked libraries is shown next to Libraries, and each library's size on hover.", "date": "2026-10-13"}
 ]}

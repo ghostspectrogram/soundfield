@@ -110,6 +110,10 @@
         <span>–</span>
         <input id="dur-max" type="text" placeholder="to" title="Longest length, e.g. 90, 4:00 or 20m (empty = no maximum)" spellcheck="false">
       </div>
+      <div id="music-filters" class="dur-custom" hidden>
+        <input id="f-bpm" type="text" placeholder="BPM" title="Tempo: 120 (give or take 2), or a range like 90-110" spellcheck="false">
+        <select id="f-key" title="Key"><option value="">Any key</option></select>
+      </div>
       <select id="f-rating" title="Filter by your star rating (Ctrl+1 … 5 rates the selected sound)">
         <option value="">Any rating</option>
         <option value="1">★ and up</option>
@@ -136,7 +140,7 @@
     <div class="side-title collapsible" id="types-title" title="Click to collapse / expand · In the list: click a category to filter, Ctrl-click to combine"><span class="st-l"><span class="chev">▾</span>Categories</span></div>
     <div class="side-section types" id="types"></div>
     <div id="side-split" title="Drag to resize · Double-click to reset"></div>
-    <div class="side-title collapsible" id="libs-title" title="Click to collapse / expand"><span class="st-l"><span class="chev">▾</span>Libraries</span><button id="add-lib" class="icon-btn" title="Link a folder (files stay where they are)">+</button></div>
+    <div class="side-title collapsible" id="libs-title" title="Click to collapse / expand"><span class="st-l"><span class="chev">▾</span>Libraries</span><span id="libs-size" title="Total size of all your linked libraries"></span><button id="add-lib" class="icon-btn" title="Link a folder (files stay where they are)">+</button></div>
     <div id="lib-tree" class="tree"></div>
     <div id="scan-status"></div>
   </aside>
@@ -149,6 +153,8 @@
       <div class="c-rate" data-sort="rate">Rating</div>
       <div class="c-fmt" data-sort="fmt">Format</div>
       <div class="c-type" data-sort="type">Category</div>
+      <div class="c-key" data-sort="key" title="Key. ≈ = worked out by ear">Key</div>
+      <div class="c-bpm" data-sort="bpm" title="Tempo in beats per minute. ≈ = worked out by ear">BPM</div>
       <div class="c-ch" data-sort="ch">Ch</div>
       <div class="c-dur" data-sort="dur">Length</div>
       <div class="c-sr" data-sort="sr">Rate</div>
@@ -186,6 +192,14 @@
           <button data-omode="sf" class="on" role="tab">Soundfield search</button>
           <button data-omode="web" role="tab">Website search</button>
         </div>
+        <div class="seg" id="o-kinds" role="tablist" title="Search for sound effects or for music">
+          <button data-okind="sfx" class="on" role="tab">Sound effects</button>
+          <button data-okind="music" role="tab">Music</button>
+        </div>
+        <div id="o-music-filters" class="dur-custom" hidden>
+          <input id="o-bpm" type="text" placeholder="BPM" title="Tempo: 120 (give or take 2), or a range like 90-110" spellcheck="false">
+          <select id="o-key" title="Key"><option value="">Any key</option></select>
+        </div>
         <span id="o-mode-hint"></span>
         <div id="o-dest" title="Where Save puts sounds this session. Click to change it at any time.">
           <span>Save to</span>
@@ -199,6 +213,8 @@
         <div class="c-src" data-sort="sourceLabel">Source</div>
         <div class="c-lic" data-sort="license">Licence</div>
         <div class="c-dur" data-sort="duration">Length</div>
+        <div class="c-key" data-sort="keyIdx" title="Key. ≈ = the site's own estimate">Key</div>
+        <div class="c-bpm" data-sort="bpm" title="Tempo. ≈ = the site's own estimate">BPM</div>
         <div class="c-ofmt" data-sort="ext">Format</div>
         <div class="c-by" data-sort="creator">By</div>
         <div class="c-act"></div>

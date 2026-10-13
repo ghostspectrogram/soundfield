@@ -254,11 +254,36 @@ let analyzing = null;
 
 let analysisVersion = 0; // loaded from shared/categorize.mjs at startup
 
+// What the renderer needs from one cached result: the category heard, or
+// [category, bpm, key] for music whose tempo / key was listened for.
+const heardValue = v => (Array.isArray(v[5]) ? [v[2] || null, v[5][0] || 0, v[5][1] || ''] : v[2]);
+
 // Only results from the current listening rules; older ones get redone.
 function analysisForRenderer(id) {
   const out = {};
-  for (const [rel, v] of Object.entries(store.analysis(id))) if (v[2] && v[3] === analysisVersion) out[rel] = v[2];
+  for (const [rel, v] of Object.entries(store.analysis(id))) if ((v[2] || v[5]) && v[3] === analysisVersion) out[rel] = heardValue(v);
   return out;
+}
+
+// Epidemic content is never listened to (standing rule): sounds saved from Epidemic or from
+// Team SFX under an Epidemic licence, files Epidemic names ES_…, and folders whose
+// CREDITS.txt (in the folder or one above it, inside the library) mentions Epidemic.
+function epidemicFilter(lib) {
+  const saved = new Set(Object.values(store.downloads()).filter(d => d.source === 'epidemic' || (d.source === 'teamsfx' && /epidemic/i.test(d.licenseText || ''))).map(d => path.resolve(d.path).toLowerCase()));
+  const credits = new Map(); // folder rel -> mentions Epidemic
+  const byCredits = dir => {
+    if (credits.has(dir)) return credits.get(dir);
+    let v = false;
+    try { v = /epidemic/i.test(fs.readFileSync(path.join(lib.path, dir, 'CREDITS.txt'), 'utf8')); } catch {}
+    if (!v && dir) v = byCredits(dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '');
+    credits.set(dir, v);
+    return v;
+  };
+  return r => {
+    const file = r.rel.slice(r.rel.lastIndexOf('/') + 1);
+    if (/^ES_/.test(file) || saved.has(path.join(lib.path, r.rel).toLowerCase())) return true;
+    return byCredits(r.rel.includes('/') ? r.rel.slice(0, r.rel.lastIndexOf('/')) : '');
+  };
 }
 
 function queueAnalysis(id) {
@@ -273,8 +298,8 @@ function pumpAnalysis() {
   const lib = libraries.find(l => l.id === id);
   if (!lib || lib.offline) return pumpAnalysis();
   if (prefsNow().backgroundSorting === false) { analysisQueue.length = 0; return; } // turned off in Settings
-  const epi = new Set(Object.values(store.downloads()).filter(d => d.source === 'epidemic' || (d.source === 'teamsfx' && /epidemic/i.test(d.licenseText || ''))).map(d => path.resolve(d.path).toLowerCase()));
-  const records = store.index(id).filter(r => !epi.has(path.join(lib.path, r.rel).toLowerCase()));
+  const isEpi = epidemicFilter(lib);
+  const records = store.index(id).filter(r => !isEpi(r));
   const cache = store.analysis(id);
   // Forget files that are gone.
   const live = new Set(records.map(r => r.rel));
@@ -292,7 +317,7 @@ function pumpAnalysis() {
   w.on('message', m => {
     if (m.type === 'results') {
       const map = {};
-      for (const [rel, v] of Object.entries(m.results)) { cache[rel] = v; if (v[2]) map[rel] = v[2]; }
+      for (const [rel, v] of Object.entries(m.results)) { cache[rel] = v; if (v[2] || v[5]) map[rel] = heardValue(v); }
       for (const [rel, v] of Object.entries(m.loudness || {})) { const r = byRel.get(rel); if (r) setLoudness(full(r), r.size, r.mtime, v); }
       if (Object.keys(m.results).length && Date.now() - savedAt > 15000) { store.saveAnalysis(id, cache); savedAt = Date.now(); }
       send('analysis:update', { id, map, done: m.done, total: m.total });
@@ -1250,7 +1275,8 @@ function registerOnlineIpc() {
   ipcMain.handle('online:download', async (e, r, saveDir) => {
     const custom = typeof saveDir === 'string' && saveDir && path.isAbsolute(saveDir) ? path.resolve(saveDir) : null;
     const root = custom || downloadsDir();
-    const dir = custom || path.join(root, online.safeName(r.sourceLabel));
+    const music = r.kind === 'music';
+    const dir = custom || (music ? path.join(root, 'Music', online.safeName(r.sourceLabel)) : path.join(root, online.safeName(r.sourceLabel)));
     const downloads = store.downloads();
     const known = downloads[r.key];
     // Already saved in this folder: nothing to do. Saved somewhere else: save another copy here.
@@ -1289,6 +1315,8 @@ function registerOnlineIpc() {
       path: dest, source: r.source, sourceLabel: r.sourceLabel, title: r.title, creator: r.creator, pageUrl: r.pageUrl,
       license: r.license, licenseLabel: lic.label || r.license, licenseUrl: r.licenseUrl || '', credit: r.source === 'teamsfx' ? !!r.credit : lic.credit, quality, at: Date.now(),
       ...(r.source === 'teamsfx' ? { licenseText: r.licenseText || '', credits: r.credits || '', id: r.id, rev: r.rev } : {}),
+      // Saved from a Music search: always sorted as Musical, with the tempo / key the search found.
+      ...(music ? { kind: 'music', bpm: Number(r.bpm) || 0, mkey: String(r.mkey || ''), bpmEst: !!r.bpmEst, keyEst: !!r.keyEst } : {}),
     };
     downloads[r.key] = entry;
     store.saveDownloads(downloads);

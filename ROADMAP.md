@@ -1,6 +1,84 @@
 # Soundfield roadmap
 
-Agreed on 2026-10-12. Nothing here has been started yet.
+Agreed on 2026-10-12. Nothing here has been started yet. The current release is **0.1.0**, merged on GitHub as PR #3; this update will ship as **0.2.0**.
+
+## Decisions
+- **Varispeed is tape-style:** pitch and speed change together.
+- **Notes, ratings, markers and recently played share one per-sound store.** Entries follow a sound when it's moved or renamed, using name + size matching like project relink.
+- **Preferences move from browser storage to a settings file** in the app data folder, so backups include them.
+- **Matched loudness must not slow anything down:**
+  - A sound's loudness is measured for free while its waveform is built, since that already reads the whole file.
+  - In the background, only short sounds (under about a minute) are measured, at low priority, paused while you play or search.
+  - Until a sound is measured, a quick estimate is used.
+- **Versioning:** the version and build date show in Settings → About. A **"What's new"** note appears once after each update.
+- **Keyboard:** 1–9 already solo channels, so ratings use **Ctrl+1…5** (Ctrl+0 clears). Other new shortcuts are checked against the existing ones before they're picked.
+
+## Build plan
+Each phase:
+1. Gets built and checked with the test script.
+2. Is installed for you to try.
+3. Is committed.
+4. Adds its user-facing features to `lighthouse-feed.json`, in the same commit, pushed to main. That file is public and feeds the Lighthouse dashboard's suggestions, so it never contains keys, tokens or personal data.
+5. Is reflected on the [status dashboard](https://claude.ai/artifact/CGS1fxnHQpkrLqWV3TSF5r).
+
+The phases are merged to GitHub together once you're happy.
+
+1. **Foundation:** a one-command test script; preferences moved to the settings file; version number, About and "What's new".
+2. **Safety:** everything in the Safety section below. It comes early because it protects your files and disk.
+3. **Settings panel:** everything in the Settings section below, wired to the settings that already exist.
+4. **Under the hood:**
+   - Chunked decoding for long MP3 / FLAC files.
+   - Folder watching.
+   - Region-file cleanup.
+   - Output device choice.
+   - Remembered save folder.
+5. **Listening:** tape-style varispeed, loudness measurement with matched-loudness preview, the spectrogram view.
+6. **Your sounds:**
+   - The per-sound store, with notes, star ratings, markers and recently played.
+   - Search support for them, e.g. `rating:4+`.
+7. **Backups:** automatic plus manual backup / restore, with old backups deleted automatically.
+
+## Also in this update
+- **Undo:** an "Undo" button on the toast after removing sounds from a project, deleting a project, clearing a rating / notes / history, or restoring a backup.
+- **Problem log:** errors are written to a small rotating log file in the app data folder. Settings → About gets "Copy problem report", so a bug can be pasted to Claude without guesswork.
+- **Speed checks in the test script:** startup time, search time, project open time and memory use are measured on every build. A change that makes something noticeably slower gets flagged before it reaches you.
+- **More loudness info:** the integrated LUFS and true peak from the loudness measurement are shown in the player's info panel next to Peak / RMS.
+- **Markers in exports:** Materialize / Zip can include a markers list (time + name) next to the sound files.
+- **GitHub release:** after this update is merged, the built Soundfield is attached to a GitHub release as a zip, as an off-PC copy of a working build.
+
+## Safety
+Anything that copies, moves, deletes or downloads a lot must say how big it is before it starts. Anything that can't fit must be stopped.
+
+**General rules (apply to every item below)**
+- **Show the total size and file count before starting**, and check the free space on the destination drive. If it won't fit (plus a 2 GB margin), **block it** and say how much space is missing.
+- **Above 10 GB or 5,000 files, ask for a second confirmation** with the size in bold (both limits adjustable in Settings).
+- **Long jobs get a Cancel button.** A cancelled copy removes its half-finished folder or zip.
+
+**Projects**
+- **Project size stat:** the project banner shows the total size of its sounds ("377 sounds · 4.2 GB · 3 missing"), and so does the sidebar tooltip. The Materialize / Zip dialog shows the size and the free space on the chosen drive.
+- **Adding many sounds:** "Add all N to project" adds the total size to its confirmation ("30,738 sounds · 1.1 TB"). Adding is harmless (only references), but it makes a later Materialize obvious.
+- **Materializing into a linked library:** warn when the destination is inside a linked library. The copies would show up as duplicates of every sound.
+
+**Recycling (deleting)**
+- **Network and NAS drives have no Recycle Bin**, so Windows deletes files there **permanently**. Detect network locations (UNC paths and mapped drives) and say so plainly, with a separate "Delete permanently" confirmation, or refuse.
+- **Very large recycles:** the Recycle Bin has a size limit, and files over it may be deleted permanently instead of recycled. Show the total size, and confirm twice above the thresholds (e.g. Ctrl+A → Delete on a whole library).
+- **Mass "Keep this one / Recycle extra copies"** in Duplicates already shows sizes. Add the second confirmation above the thresholds.
+
+**Zips**
+- **"Extract here" currently overwrites same-named files silently** (tar's default). Never overwrite: keep existing files (tar `-k`) and report what was skipped.
+- **Before extracting,** show the uncompressed size and check free space. A zip whose contents are far larger than the zip itself (a "zip bomb") gets a warning.
+
+**Dragging to a DAW**
+- **Dragging hundreds of files** (or many GB) into a DAW can freeze it or copy a huge amount. Above 200 files or 5 GB, don't start the drag; suggest Materialize instead.
+- **Region export currently loads the whole selection into memory.** A long selection on a 2 GB file could crash Soundfield, so write it in pieces instead, and check free space.
+
+**Online**
+- **Large saves:** confirm before saving a sound over 500 MB (some Internet Archive recordings are several GB).
+- **Large previews:** some Internet Archive "previews" are the original multi-GB WAV. Above 200 MB, ask before downloading a preview, and show the size in the result row.
+
+**Libraries and duplicates**
+- **Linking a huge folder:** warn when linking a whole drive root, the Windows folder or your user profile. They hold millions of non-sound files and would take very long to scan.
+- **"Same audio" duplicate search** reads candidate files from disk. Before starting, show roughly how much it will read ("about 380 GB to compare"), and offer Cancel while it runs.
 
 ## Planned
 
@@ -93,5 +171,6 @@ Every setting below goes in. Layout rules:
 | **Saving & files** | Default save folder for Soundfield search (remembered across launches) · Write Credits.txt on/off · Drag-to-DAW region folder and how many days to keep region files · Preview cache size (300 MB now) + "Clear cache now" |
 | **Libraries** | Watch folders for changes on/off · Background category sorting on/off · Manage excluded duplicate folders |
 | **Accounts** | Freesound key/account and Epidemic keys, moved here from the Online top bar |
+| **Safety** | Size that needs a second confirmation (10 GB default) · File count that needs it (5,000) · Drag-to-DAW limit (200 files / 5 GB) · Ask before previews over (200 MB) · Network-drive deletes: refuse / ask |
 | **Your data** | Backups: how often (daily / weekly), where, how many to keep (older ones deleted) · Recently played: how many to remember, "Clear history" |
 | **Look & feel** | Startup tab (Library / Online / last used) · Text size / row height · Keyboard shortcuts cheat sheet |

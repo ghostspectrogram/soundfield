@@ -470,7 +470,6 @@ Only remove an item after grepping your copy to confirm it's really unused.
 | `renderer/js/app.js` | `wave.setDbView(true)` and the one-time `prefs.dbView` migration | Same |
 | `renderer/js/app.js` | `fmtBytes` and `startPlay` in the `createOnline({...})` context | The online module never used them |
 | `renderer/js/app.js` | `.type-row` in the sidebar click selector | No such element |
-| `renderer/js/layouts.js` | `export function formatClassLabel` | No importers |
 | `renderer/js/online.js` | `by` / `by-sa` entries in `LIC_NAMES` and `LIC_TIPS` | Soundfield search only returns `cc0`, `pd` and `epidemic` |
 | `renderer/styles.css` | `.chips` (and the rules under it), `.lic.by`, `.lic.by-sa` | No matching elements |
 
@@ -482,7 +481,7 @@ To find dead CSS, list every `.class` and `#id` in `styles.css` and check that e
 
 ## 4. Checked and left alone
 
-- `package.json` `"exports"`: exposes the engine/layout modules for embedding. It's intentional, not dead.
+- `package.json` `"exports"`: exposes the engine/layout modules for embedding (Johnny's DAW uses them). It's intentional, not dead. So an exported function with no importer *inside* Soundfield (e.g. `formatClassLabel` in `layouts.js`) is **not** dead code: something outside may use it. It was briefly removed in this pass, then restored.
 - `saveEpi()` deleting the old `epClientId`/`epToken`/… fields: a harmless one-way migration.
 - `Documents\Soundfield Regions`: drag-a-selection region files pile up over time. Not cleaned automatically, because they may be referenced by DAW sessions.
 

@@ -324,6 +324,13 @@ function flushLoudness() {
   if (keys.length > 150000) for (const k of keys.slice(0, keys.length - 150000)) delete loudMap[k]; // keep the newest
   store.saveLoudness(loudMap);
 }
+// ------------------------------------------------------------------ your sounds
+// Notes, ratings, markers and recently played (sounds.json). The window sends the whole set on
+// every change; it's written at most once a second, and at quit.
+let mineData = null, mineTimer = null;
+function mineStore() { if (!mineData) mineData = store.mine() || { sounds: {}, recent: [] }; return mineData; }
+function flushMine() { clearTimeout(mineTimer); mineTimer = null; if (mineData) store.saveMine(mineData); }
+
 // Paused while something plays: background measuring reads files from disk.
 const busyFlag = new Int32Array(new SharedArrayBuffer(4));
 
@@ -529,7 +536,7 @@ function registerIpc() {
     for (const l of libraries) records[l.id] = store.index(l.id);
     const analysis = {};
     for (const l of libraries) analysis[l.id] = analysisForRenderer(l.id);
-    return { libs, records, analysis, typeOverrides, projects: store.projects(), downloads: store.downloads(), favorites: [...favorites], overrides, sep: path.sep, platform: process.platform };
+    return { libs, records, analysis, typeOverrides, projects: store.projects(), downloads: store.downloads(), favorites: [...favorites], mine: mineStore(), overrides, sep: path.sep, platform: process.platform };
   });
 
   // ---------------------------------------------------------------- projects
@@ -538,7 +545,7 @@ function registerIpc() {
 
   // Zip a project into one file, or "materialize" it as a real folder of copies.
   ipcMain.handle('proj:export', async (e, req) => {
-    const { mode, name, items, layout, manifest, repoint } = req;
+    const { mode, name, items, layout, manifest, repoint, markerList } = req;
     const safe = (name || 'Project').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || 'Project';
     let dest;
     if (mode === 'zip') {
@@ -586,7 +593,7 @@ function registerIpc() {
     try {
       result = await new Promise((resolve, reject) => {
         const w = job.w = new Worker(path.join(__dirname, 'lib', 'export-worker.js'), {
-          workerData: { mode, items, dest, layout: layout === 'keep' ? 'keep' : 'flat', manifest: manifest !== false, projectName: name },
+          workerData: { mode, items, dest, layout: layout === 'keep' ? 'keep' : 'flat', manifest: manifest !== false, markerList: markerList !== false, projectName: name },
         });
         w.on('message', m => {
           if (m.type === 'progress') send('export:progress', { ...m, mode, name });
@@ -708,6 +715,22 @@ function registerIpc() {
     if (['auto', 'quad', 'ambix', 'fuma'].includes(patch.fourCh)) lib.fourCh = patch.fourCh;
     saveLibs();
     return libPublic(lib);
+  });
+
+  // Measured sound features per library ({ libId: { rel: [...] } }), for Find similar sounds.
+  ipcMain.handle('analysis:features', () => {
+    const out = {};
+    for (const l of libraries) {
+      const m = (out[l.id] = {});
+      for (const [rel, v] of Object.entries(store.analysis(l.id))) if (v[3] === analysisVersion && Array.isArray(v[4]) && v[4].length) m[rel] = v[4];
+    }
+    return out;
+  });
+
+  ipcMain.on('mine:save', (e, data) => {
+    if (!data || typeof data !== 'object' || !data.sounds || !Array.isArray(data.recent)) return;
+    mineData = data;
+    if (!mineTimer) mineTimer = setTimeout(flushMine, 1000);
   });
 
   ipcMain.handle('fav:set', (e, p, on) => {
@@ -1342,4 +1365,4 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
-app.on('will-quit', () => { flushSettings(); if (loudTimer) flushLoudness(); });
+app.on('will-quit', () => { flushSettings(); if (loudTimer) flushLoudness(); if (mineTimer) flushMine(); });

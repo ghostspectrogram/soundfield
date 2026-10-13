@@ -8,6 +8,7 @@ const SECTIONS = [
   ['waveform', 'Waveform', 'The waveform, its level scale and readouts.'],
   ['files', 'Saving & files', 'Where Soundfield writes files, and what it keeps.'],
   ['libraries', 'Libraries', 'Background work on your linked folders.'],
+  ['search', 'Search', 'How the library search reads what you type.'],
   ['accounts', 'Accounts', 'Online services Soundfield search uses.'],
   ['safety', 'Safety', 'When Soundfield asks before big copies, deletes and downloads.'],
   ['data', 'Your data', 'Where your libraries, projects and settings are kept.'],
@@ -26,6 +27,9 @@ const KEYS = [
   ['M', 'Matched loudness on / off'],
   ['[ / ]', 'Varispeed down / up a semitone'],
   ['V', 'Waveform / spectrogram'],
+  ['K', 'Drop a marker at the playhead'],
+  ['Ctrl+1 … 5 / Ctrl+0', 'Rate the selected sound(s) / clear the rating'],
+  ['Ctrl+Z', 'Undo, while a toast offers it'],
   ['F', 'Favorite'],
   ['P', 'Add the sound you’re hearing to the project used last'],
   ['Z', 'Zoom the waveform to fit'],
@@ -78,7 +82,13 @@ export function createSettings(ctx) {
     // ---------------------------------------------------------------- libraries
     { section: 'libraries', key: 'watchFolders', type: 'toggle', def: true, label: 'Watch folders for changes', desc: 'Sounds you add, rename or delete in your library folders show up within a few seconds. Off: they’re picked up when Soundfield starts.' },
     { section: 'libraries', key: 'backgroundSorting', type: 'toggle', def: true, label: 'Sort sounds by listening', desc: 'Sounds whose names don’t say what they are get listened to in the background to pick a category. Turn off to keep the disk quiet.' },
+    { section: 'libraries', type: 'custom', render: renderHiddenFolders, label: 'Folders hidden from All sounds', desc: 'Click the eye beside a folder under Libraries to hide it. Its sounds stay listed when you open that folder.', keywords: 'hide exclude archive' },
     { section: 'libraries', type: 'custom', render: renderDupFolders, label: 'Folders left out of duplicate searches', desc: 'Right-click a folder under Libraries to add one. Click ✕ to include it again.', keywords: 'duplicates exclude' },
+    // ---------------------------------------------------------------- search
+    { section: 'search', key: 'searchSynonyms', type: 'toggle', def: true, label: 'Find synonyms', desc: 'Searching “gun” also finds rifle, pistol, gunshot…, listed after the exact matches. Put a word in quotes ("gun") to search for just that word.' },
+    { section: 'search', key: 'searchTypos', type: 'toggle', def: true, label: 'Forgive small typos', desc: 'When no sound contains a word, close spellings that do exist are searched instead: “explsion” finds explosion.' },
+    { section: 'search', type: 'custom', render: renderUserSynonyms, label: 'Your own synonyms', desc: 'One group per line, words separated by commas or =, e.g.  whoosh = swish, swoosh. Added to the built-in list.', keywords: 'words aliases' },
+    { section: 'search', type: 'custom', render: renderSearchHelp, label: 'Search tricks', desc: '', keywords: 'rating stars notes markers filter' },
     // ---------------------------------------------------------------- accounts
     { section: 'accounts', type: 'custom', render: el => renderAccount(el, 'freesound'), label: 'Freesound', desc: 'A free key gives better search; connecting your account lets Save download original WAV / AIFF / FLAC files.', keywords: 'api key oauth' },
     { section: 'accounts', type: 'custom', render: el => renderAccount(el, 'epidemic'), label: 'Epidemic Sound', desc: 'Your own Epidemic account key: search, previews and WAV saves through your subscription.', keywords: 'api key mcp' },
@@ -92,6 +102,7 @@ export function createSettings(ctx) {
     { section: 'safety', key: 'safety.networkDelete', type: 'select', def: SAFETY_DEFAULTS.networkDelete, label: 'Deleting on network or USB drives', desc: 'These drives have no Recycle Bin, so a delete there is permanent.',
       options: [['ask', 'Warn me, then let me delete'], ['refuse', 'Never delete there']] },
     // ---------------------------------------------------------------- your data
+    { section: 'data', key: 'recentMax', type: 'number', def: 100, min: 10, max: 1000, step: 10, unit: 'sounds', label: 'Recently played keeps', desc: 'How many of the last sounds you played are listed under Recently played.', extra: 'recent' },
     { section: 'data', type: 'custom', render: renderDataDir, label: 'Data folder', desc: 'Libraries, projects, settings, caches and the problem log. Your sound files are never stored here.', keywords: 'appdata settings.json' },
     // ---------------------------------------------------------------- look & feel
     { section: 'look', key: 'startupTab', type: 'select', def: 'last', label: 'Open on start', desc: 'Which tab Soundfield shows when it starts.', options: [['last', 'The tab I used last'], ['library', 'Library'], ['online', 'Online']] },
@@ -225,6 +236,15 @@ export function createSettings(ctx) {
         b.addEventListener('click', async () => { const n = await api.clearPreviewCache(); toast(`Cleared ${fmtBytes(n)} of previews`); b.textContent = 'Clear now (0 B)'; });
         ctl.appendChild(b);
       }
+      if (it.extra === 'recent') {
+        const b = document.createElement('button');
+        b.className = 'set-btn';
+        const n = actions.recentCount();
+        b.textContent = `Clear the list (${n.toLocaleString()})`;
+        b.disabled = !n;
+        b.addEventListener('click', () => { actions.clearRecent(); b.textContent = 'Clear the list (0)'; b.disabled = true; });
+        ctl.appendChild(b);
+      }
     } else if (it.type === 'folder') {
       const path = document.createElement('div');
       path.className = 'set-path';
@@ -261,6 +281,40 @@ export function createSettings(ctx) {
     s.value = cur;
     s.addEventListener('change', () => set(it, s.value));
     el.replaceChildren(s);
+  }
+
+  function renderHiddenFolders(el) {
+    const list = actions.hiddenFolders();
+    if (!list.length) { el.innerHTML = '<span class="set-muted">None. Every folder is in All sounds.</span>'; return; }
+    el.replaceChildren(...list.map(h => {
+      const c = document.createElement('div');
+      c.className = 'set-chip';
+      const t = document.createElement('span'); t.textContent = h.label;
+      const x = document.createElement('button'); x.textContent = '✕'; x.title = 'Show it in All sounds again';
+      x.addEventListener('click', () => { h.show(); renderHiddenFolders(el); });
+      c.append(t, x);
+      return c;
+    }));
+  }
+
+  function renderUserSynonyms(el) {
+    const ta = document.createElement('textarea');
+    ta.className = 'set-text';
+    ta.rows = 4;
+    ta.spellcheck = false;
+    ta.placeholder = 'whoosh = swish, swoosh\nfoley feet = footsteps';
+    ta.value = prefs.userSynonyms || '';
+    ta.addEventListener('change', () => { prefs.userSynonyms = ta.value; savePrefs(); apply('userSynonyms', ta.value); });
+    el.replaceChildren(ta);
+  }
+
+  function renderSearchHelp(el) {
+    el.innerHTML = `<div class="set-muted set-tricks">
+      <div><code>door -metal</code> sounds with “door” but not “metal”</div>
+      <div><code>"car pass"</code> that exact phrase, no synonyms</div>
+      <div><code>rating:4+</code> 4 or 5 stars · <code>rating:3</code> exactly 3 · <code>rating:2-</code> 2 or fewer · <code>rating:0</code> not rated</div>
+      <div><code>has:notes</code> · <code>has:markers</code> · <code>has:rating</code> sounds you’ve added something to</div>
+      <div>Your notes and marker names are searched like file names.</div></div>`;
   }
 
   function renderDupFolders(el) {

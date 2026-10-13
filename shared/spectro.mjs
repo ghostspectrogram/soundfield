@@ -30,12 +30,13 @@ export function makeFft(N) {
 }
 
 // Where each FFT frame starts: `cols` columns over [start, end), up to `perCol` frames per column,
-// spread evenly and centred in their share of the column. When the range is short, every hop
-// (N/4) gets its own column instead. Returns { cols, starts: Float64Array, colOf: Uint32Array }.
+// spread evenly and centred in their share of the column. Short ranges still get every column
+// (the windows overlap more), so a short sound is as sharp as a long one; extra frames per column
+// are only used when a column is wider than a hop (N/4). Returns { cols, starts, colOf }.
 export function planWindows({ start, end, cols, perCol, N, frames }) {
   const hop = N / 4, span = Math.max(1, end - start);
-  const possible = Math.max(1, Math.floor(span / hop));
-  if (possible <= cols * perCol) { cols = Math.min(cols, possible); perCol = Math.max(1, Math.floor(possible / cols)); }
+  cols = Math.max(1, Math.min(Math.round(cols), Math.floor(span)));
+  perCol = Math.max(1, Math.min(perCol, Math.floor(span / cols / hop)));
   const n = cols * perCol, starts = new Float64Array(n), colOf = new Uint32Array(n);
   const colSpan = span / cols, sub = colSpan / perCol;
   for (let c = 0, i = 0; c < cols; c++) {

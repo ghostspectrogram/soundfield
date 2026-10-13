@@ -40,6 +40,8 @@
     const pack = S.items.find(it => /Pack Hit\.wav$/.test(it.rec.rel));
     const bg = pack && await window.api.getLoudness(pack.path, pack.rec.size, pack.rec.mtime);
     check('Spectrogram level range is remembered', sf.prefs.specRange === 95 && sf.wave.specRange === 95 && document.querySelector('#spec-range-in').value === '95', `${sf.prefs.specRange} dB`);
+    const rainR = S.items.find(it => /Rain Ambience Loop/.test(it.rec.rel));
+    check('Ratings are kept', rainR && (S.mine.sounds[rainR.path] || {}).r === 5, rainR ? `${(S.mine.sounds[rainR.path] || {}).r} stars` : 'not found');
     check('Short sounds are measured in the background', !!bg, bg ? `Pack Hit: ${bg[0]} LUFS` : 'not measured');
     return { results, metrics };
   }
@@ -177,6 +179,89 @@
   check('Quick switching while playing', ok, `${errs.length} errors, ${sf.engine.playing ? 'playing' : 'stopped'} ${S.current && S.current.name}`);
   sf.engine.stop();
 
+  // ---------------------------------------------------------------- your sounds
+  const key = (k, o = {}) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, ...o }));
+  const setQuery = q => { S.query = q; sf.applyFilters(); };
+  const tick = byRel('UI/Click Tick.aif'), rain = byRel('Ambience/Rain Ambience Loop.wav');
+  await sf.selectIndex(S.view.indexOf(tick), { play: false });
+  key('4', { ctrlKey: true });
+  check('Ctrl+4 rates a sound', sf.ratingOf(tick) === 4, `${sf.ratingOf(tick)} stars`);
+  document.querySelector('#f-rating').value = '4'; document.querySelector('#f-rating').dispatchEvent(new Event('change'));
+  check('Rating filter (4 stars and up)', visible() === 1, `${visible()} listed`);
+  document.querySelector('#f-rating').value = ''; document.querySelector('#f-rating').dispatchEvent(new Event('change'));
+  setQuery('rating:4+');
+  check('Search rating:4+', visible() === 1, `${visible()} found`);
+  const starsIn = () => [...document.querySelectorAll('#list .row')].some(r => r.style.display !== 'none' && r.querySelectorAll('.c-rate .rs.on').length === 4);
+  await until(starsIn, 3000);
+  const shown = [...document.querySelectorAll('#list .row')].filter(r => r.querySelector('.c-name') && r.querySelector('.c-name').textContent.startsWith('Click Tick'));
+  check('Ratings show in the list', shown.some(r => r.querySelectorAll('.c-rate .rs.on').length === 4), `${shown.length} row(s)`);
+  setQuery('');
+  key('0', { ctrlKey: true });
+  const cleared = sf.ratingOf(tick) === 0;
+  key('z', { ctrlKey: true });
+  check('Clearing a rating can be undone', cleared && sf.ratingOf(tick) === 4, `cleared ${cleared}, after undo ${sf.ratingOf(tick)}`);
+
+  const notes = document.querySelector('#mine-notes');
+  notes.value = 'Squeaky hinge, great for menus';
+  notes.dispatchEvent(new Event('input', { bubbles: true }));
+  notes.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+  setQuery('hinge');
+  check('Notes are saved and searchable', visible() === 1 && S.view[0] === tick && S.mine.sounds[tick.path].n.includes('hinge'), `${visible()} found`);
+  setQuery('has:notes');
+  check('Search has:notes', visible() === 1, `${visible()} found`);
+  setQuery('');
+
+  S.cursor = Math.round(0.25 * 44100);
+  key('k');
+  const mk = (S.mine.sounds[tick.path].m || [])[0];
+  check('K drops a marker at the playhead', mk && Math.abs(mk[0] - 0.25) < 0.01 && sf.wave.markers.length === 1 && !!document.querySelector('.wm-flag'), mk ? `${mk[1]} at ${mk[0]} s` : 'none');
+  const mkName = document.querySelector('#meta-mine .mk-name');
+  mkName.value = 'Best click'; mkName.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+  check('Markers can be named', S.mine.sounds[tick.path].m[0][1] === 'Best click' && document.querySelector('.wm-flag').textContent === 'Best click');
+
+  // Synonyms and typos ("Explosion Big 5.1" is the only explosion)
+  setQuery('blast');
+  check('Synonyms: "blast" finds the explosion', visible() === 1 && /Explosion/.test(S.view[0].name), `${visible()} found`);
+  setQuery('"blast"');
+  check('Quotes turn synonyms off', visible() === 0, `${visible()} found`);
+  setQuery('explsion');
+  check('Small typos are forgiven', visible() === 1 && /Explosion/.test(S.view[0].name), `${visible()} found`);
+  setQuery('door');
+  const exactFirst = S.view.length >= 2 && S.view.slice(0, 2).every(it => /door/i.test(it.name));
+  check('Exact matches are listed before synonym matches', exactFirst, S.view.map(it => it.name).join(', ').slice(0, 80));
+  setQuery('');
+
+  // Recently played (the quick-switching test played every PCM sound)
+  S.scope = { type: 'recent' }; sf.applyFilters();
+  check('Recently played lists what was played, newest first', visible() >= 5 && S.view[0].path === S.mine.recent[0][0], `${visible()} listed`);
+  S.scope = { type: 'all' }; sf.applyFilters();
+
+  // Find similar: the sound itself first, then the rest
+  await sf.findSimilar(rain);
+  check('Find similar sounds', S.scope.type === 'similar' && S.view[0] === rain && S.view.length > 3 && !document.querySelector('#sim-banner').hidden, `${S.view.length} listed`);
+  document.querySelector('#sim-banner [data-a=close]').click();
+
+  // Hiding a folder from All sounds (it stays listed when opened)
+  const allN = visible();
+  const ambN = S.items.filter(it => it.folder === 'Ambience').length;
+  sf.setFolderHidden(rain.lib, 'Ambience', true);
+  const hiddenOk = visible() === allN - ambN;
+  sf.openFolder(rain.lib, 'Ambience');
+  const stillThere = S.view.filter(it => !it.isFolder).length === ambN;
+  S.scope = { type: 'all' }; sf.applyFilters();
+  setQuery('rain');
+  const searchHidden = visible() === 0;
+  setQuery('');
+  sf.runUndo();
+  check('Hide a folder from All sounds', hiddenOk && stillThere && searchHidden && visible() === allN, `hidden ${hiddenOk}, listed in its folder ${stillThere}, kept out of search ${searchHidden}, back after undo ${visible() === allN}`);
+
+  // An entry follows its file when it moves (same name and size, only one match)
+  S.mine.sounds['C:\\Moved away\\Click Tick.aif'] = S.mine.sounds[tick.path];
+  delete S.mine.sounds[tick.path];
+  const moved = sf.relinkMine();
+  check('Notes and ratings follow a moved file', moved === 1 && sf.ratingOf(tick) === 4, `${moved} moved`);
+  sf.setRating([rain], 5); // looked for after the restart
+
   // Projects
   const p = { id: 'testproj', name: 'Test project', created: Date.now(), items: [] };
   S.projects.push(p);
@@ -185,6 +270,8 @@
   check('Project lists its sounds', visible() === 3, `${visible()} listed`);
   sf.removeFromProject(p, [p.items[0].path]);
   check('Remove from project', visible() === 2, `${visible()} listed`);
+  sf.runUndo();
+  check('Removing from a project can be undone', visible() === 3, `${visible()} listed`);
   S.projects = S.projects.filter(x => x !== p); sf.saveProjects();
   S.scope = { type: 'all' }; sf.applyFilters();
 
@@ -218,8 +305,9 @@
   S.scope = { type: 'all' }; sf.applyFilters();
 
   await D({ open: CFG.exportDir, box: [] });
-  let r = await window.api.exportProject({ mode: 'copy', name: 'Test export', items: expItems, layout: 'flat', manifest: true });
+  let r = await window.api.exportProject({ mode: 'copy', name: 'Test export', items: expItems.map((x, i) => (i ? x : { ...x, markers: [[1.5, 'Test mark']] })), layout: 'flat', manifest: true, markerList: true });
   check('Materialize copies a project', r && r.count === 3, r ? `${r.count} copied, ${r.bytes} bytes of ${want}` : 'nothing');
+  check('Exports include a markers list', await window.api.exists(CFG.exportDir + '\\Test export\\_Markers.txt'));
 
   await D({ open: CFG.exportDir, box: [] });
   r = await window.api.exportProject({ mode: 'copy', name: 'Too big', items: expItems.map(x => ({ ...x, size: 1e15 })), layout: 'flat', manifest: true });

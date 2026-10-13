@@ -27,5 +27,14 @@
   {"id": "tape-varispeed", "title": "Tape-style varispeed while previewing", "summary": "A speed slider changes speed and pitch together, up to an octave either way, without touching the file or what you drag out.", "date": "2026-10-13"},
   {"id": "matched-loudness-preview", "title": "Matched loudness preview", "summary": "MATCH plays every sound at the same perceived loudness while auditioning, so quiet and loud files compare fairly.", "date": "2026-10-13"},
   {"id": "lufs-true-peak", "title": "Loudness and true peak for every sound", "summary": "The info panel shows integrated loudness (LUFS) and true peak, measured as the waveform loads or in the background.", "date": "2026-10-13"},
-  {"id": "spectrogram-view", "title": "Spectrogram view", "summary": "Switch the waveform to a spectrogram that sharpens as you zoom; its level range, scale and colours are adjustable and remembered.", "date": "2026-10-13"}
+  {"id": "spectrogram-view", "title": "Spectrogram view", "summary": "Switch the waveform to a spectrogram that sharpens as you zoom; its level range, scale and colours are adjustable and remembered.", "date": "2026-10-13"},
+  {"id": "star-ratings", "title": "Star ratings for sounds", "summary": "Rate sounds 1 to 5 stars with Ctrl+1…5 or a click, see them in a Rating column, and filter to 4 stars and up.", "date": "2026-10-13"},
+  {"id": "sound-notes", "title": "Your own notes on sounds", "summary": "Write notes on any sound; they are searchable and never written into the audio file.", "date": "2026-10-13"},
+  {"id": "sound-markers", "title": "Named markers on recordings", "summary": "Drop named markers on long recordings with K and jump back to them; exports can include a markers list.", "date": "2026-10-13"},
+  {"id": "recently-played", "title": "Recently played list", "summary": "The sidebar lists the last sounds you auditioned, newest first.", "date": "2026-10-13"},
+  {"id": "search-synonyms-typos", "title": "Search with synonyms and typo tolerance", "summary": "Searching gun also finds rifle and pistol, small typos still find the sound, and rating:4+ or has:notes search your own fields.", "date": "2026-10-13"},
+  {"id": "find-similar", "title": "Find similar sounds", "summary": "List the library sounds closest to the one you are on, by measured sound features, category, name and length.", "date": "2026-10-13"},
+  {"id": "hide-folders", "title": "Hide folders from All sounds", "summary": "Click the eye beside a library folder to keep its sounds out of All sounds and search while still browsing it directly.", "date": "2026-10-13"},
+  {"id": "undo-toast", "title": "Undo for everyday changes", "summary": "Removing sounds from a project, deleting a project, clearing ratings or notes and hiding folders can be undone.", "date": "2026-10-13"},
+  {"id": "sharp-spectrogram", "title": "Sharper spectrograms", "summary": "Short sounds and zoomed-in views get a spectrogram column per screen pixel, with smooth low frequencies.", "date": "2026-10-13"}
 ]}

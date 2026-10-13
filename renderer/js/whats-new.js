@@ -2,6 +2,22 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.6',
+    date: '2026-10-13',
+    items: [
+      'Star ratings: Ctrl+1 … 5 rates the selected sounds (Ctrl+0 clears), or click the stars in the new Rating column. “Any rating” at the top filters to 4 stars and up, and so on.',
+      'Your own notes for each sound, under the sound’s info on the right. They’re searchable, and never written into the file.',
+      'Markers: press K to drop one at the playhead, name it on the right, click its flag to play from there. Materialize and Zip can include a list of them.',
+      'Recently played in the sidebar: the last 100 sounds you played (right-click to clear).',
+      'Smarter search: “gun” also finds rifle, pistol, gunshot… (listed after exact matches), and a search with a small typo (“explsion”) still finds what you meant. Quotes search for just that word. Also rating:4+, has:notes and has:markers. Add your own synonyms in Settings → Search.',
+      'Find similar sounds (right-click a sound, or the button on the right) lists the closest sounds in your library. Background listening now measures every sound for this.',
+      'Hide a folder from All sounds: click the eye beside it under Libraries. Its sounds stay out of All sounds, search and the category counts, but are still listed when you open that folder.',
+      'Undo: removing sounds from a project, deleting a project, clearing a rating, notes or Recently played, and hiding a folder all offer Undo (or Ctrl+Z).',
+      'Spectrograms are sharp on short sounds and when zoomed in: one column per screen pixel, and smooth low frequencies.',
+      'Notes, ratings and markers follow a file that’s moved to another folder.',
+    ],
+  },
+  {
     version: '0.2.0-beta.5',
     date: '2026-10-13',
     items: [

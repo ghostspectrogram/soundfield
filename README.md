@@ -50,6 +50,7 @@ The app icon lives in `build/icon.ico` / `build/icon.png`. It's drawn by `tools/
 | `renderer/js/sources.js`, `renderer/js/chunked.js` | Audio sources: PCM streamed off disk; long MP3 / FLAC decoded about 10 s at a time (frame index + small stand-alone pieces); everything else decoded whole |
 | `renderer/js/waveform.js`, `renderer/js/speakers.js` | Multichannel waveform view and top-down speaker / ambisonic intensity map |
 | `renderer/js/app.js` | The explorer UI |
+| `renderer/js/search.js` | Search parsing, synonyms (built-in list), typo tolerance, `rating:` / `has:` filters |
 | `renderer/js/whats-new.js` | Release notes for About and the "What's new" note |
 | `tools/build.js`, `tools/test.js` | Standalone build + install, and the test / speed runs (`tools/fixtures.js` makes the test library) |
 
@@ -161,7 +162,23 @@ Click **Online** (next to *Library* at the top). It has two modes, switched unde
 ### Website search
 Sites that don't let other apps search them: Freesound and Wikimedia Commons (their full catalogues, every licence), Pixabay, Mixkit, Zapsplat, Uppbeat, SoundBible, Sound Gator, 99Sounds, the Sonniss GDC bundles, Epidemic Sound, Artlist, Envato Elements, Storyblocks, Soundsnap and BBC Sound Effects. Type a search, then click a site to open it there. Hover a site for its licence terms. BBC Sound Effects are for personal / educational use only. Sounds you download from these sites can be linked as a library like any other folder.
 
+## Your sounds: ratings, notes, markers
+Kept by Soundfield in `sounds.json` in the data folder; your audio files are never changed. Each entry remembers the file's name and size, so it follows a file moved to another folder (when exactly one file matches).
+- **Ratings (1–5 stars):** Ctrl+1 … 5 rates the selected sound(s), Ctrl+0 clears; or click the stars in the **Rating** column or the info panel. **Any rating** in the top bar filters (★★★★ and up…).
+- **Notes:** type in the box under the sound's info. Notes are searched like file names.
+- **Markers:** `K` drops one at the playhead (or the selection start). Name it in the info panel; click its flag on the ruler to play from there, right-click to rename or delete. Materialize / Zip can add `_Markers.txt` (file, time, name).
+- **Recently played:** the sidebar lists the last 100 sounds you played, newest first (Settings → Your data changes the number; right-click to clear).
+- **Find similar sounds:** right-click a sound (or the button in the info panel). The closest sounds are listed by the features the background listening measures (loudness over time, noisiness, onsets, pitch…), plus category, name and length. Sounds not measured yet are compared by name, category and length.
+- **Undo:** removing sounds from a project, deleting a project, clearing a rating, notes or Recently played, deleting a marker and hiding a folder show a toast with **Undo** (or Ctrl+Z while it shows).
+
+## Search
+- Words narrow the list; `-word` excludes; `"exact phrase"` matches a phrase.
+- **Synonyms:** "gun" also finds rifle, pistol, gunshot… from a built-in sound-design list, listed after the exact matches. Quotes (`"gun"`) search for just that word. Add your own groups in Settings → Search.
+- **Typos:** when a search finds nothing, close spellings that exist in your library are tried ("explsion" → explosion).
+- **Your fields:** `rating:4+`, `rating:3`, `rating:2-`, `rating:0` (not rated), `has:notes`, `has:markers`, `has:rating`.
+
 ## Sidebar
+- **Hide a folder from All sounds:** click the eye beside a folder (or library) under Libraries, or right-click it. Its sounds stay out of All sounds, its search, the category counts and Find similar, but are still listed when you open that folder. Settings → Libraries lists hidden folders.
 - **Resize:** drag the bar just above **Libraries** up or down to make Categories shorter or taller. Double-click the bar to reset.
 - **Collapse:** click the **Categories** or **Libraries** header (▾) to collapse that section; click again to expand. When one is collapsed, the other uses the space.
 - Sizes and collapsed sections are remembered.
@@ -228,7 +245,10 @@ The sidebar lists the categories that have sounds. Click one to filter (Ctrl-cli
 | `[` / `]` | Varispeed down / up a semitone |
 | `V` | Waveform / spectrogram |
 | `F` | Favorite |
-| Ctrl+F or `/` | Search (`-word` excludes, `"exact phrase"` matches a phrase) |
+| Ctrl+F or `/` | Search (`-word` excludes, `"exact phrase"` matches a phrase, `rating:4+`, `has:notes`) |
+| Ctrl+1 … 5 / Ctrl+0 | Rate the selected sound(s) / clear the rating |
+| `K` | Drop a marker at the playhead |
+| Ctrl+Z | Undo, while a toast offers it |
 | Shift-click / Shift+↑↓ | Select every sound between the last one clicked and this one |
 | Ctrl-click | Add a sound to the selection, or remove it |
 | Ctrl+A | Select all listed sounds (Esc clears the selection) |

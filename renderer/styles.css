@@ -112,7 +112,7 @@ select:focus { border-color: var(--accent); }
 
 /* ------------------------------------------------------------- list */
 #center { grid-area: center; display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; background: var(--bg); overflow: hidden;
-  --cols: 30px 320px 78px 120px 44px 74px 62px 48px 360px 260px; --row-w: 1404px; }
+  --cols: 30px 320px 84px 78px 120px 44px 74px 62px 48px 360px 260px; --row-w: 1488px; }
 .row {
   display: grid;
   grid-template-columns: var(--cols);
@@ -666,3 +666,64 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .switch.on::after { transform: translateX(18px); background: var(--accent); }
 .switch:focus-visible, .set-btn:focus-visible, .set-nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .switch, .switch::after { transition: none; } }
+
+/* ------------------------------------------------------------- your sounds: ratings, notes, markers */
+/* The rating cell is last in each row's markup; order puts it right after the name. */
+#list .row > *, #list-header > * { order: 3; }
+#list .row > .c-fav, #list-header > .c-fav { order: 0; }
+#list .row > .c-name, #list-header > .c-name { order: 1; }
+#list .row > .c-rate, #list-header > .c-rate { order: 2; }
+.stars { display: inline-flex; gap: 1px; letter-spacing: 0; white-space: nowrap; }
+.stars .rs { cursor: pointer; color: #3a4250; font-size: 12px; line-height: 1; padding: 0 1px; }
+.stars .rs.on { color: var(--warn); }
+.stars:hover .rs { color: #5a6475; }
+.stars:hover .rs.on { color: var(--warn); }
+.stars .rs:hover, .stars .rs:hover ~ .rs { opacity: .75; }
+#list .row:not(:hover):not(.selected) .stars.none { visibility: hidden; }
+#meta-mine { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 6px; }
+#meta-mine[hidden] { display: none; }
+.mine-row { display: flex; align-items: center; gap: 8px; }
+.mine-l { color: var(--dim); min-width: 52px; }
+#meta-mine .stars .rs { font-size: 15px; }
+#mine-notes { width: 100%; resize: vertical; min-height: 44px; max-height: 240px; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; font: 12px/1.4 inherit; font-family: inherit; }
+#mine-notes:focus { outline: none; border-color: var(--accent); }
+.linkish { background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
+.linkish:hover { text-decoration: underline; }
+.mk-list { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow: auto; }
+.mk { display: flex; align-items: center; gap: 4px; }
+.mk-t { flex: none; background: none; border: 0; padding: 1px 3px; color: #f6c177; font: 11px ui-monospace, Consolas, monospace; cursor: pointer; border-radius: 3px; }
+.mk-t:hover { background: rgba(246,193,119,.12); }
+.mk-name { flex: 1; min-width: 0; background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--text); font-size: 12px; padding: 1px 4px; }
+.mk-name:hover { border-color: var(--line); }
+.mk-name:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+.mk-x { flex: none; background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
+.mk-x:hover { color: var(--danger, #fc8181); }
+.mine-sim { align-self: flex-start; margin-top: 2px; height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); font-size: 12px; cursor: pointer; }
+.mine-sim:hover { border-color: var(--accent); color: var(--accent); }
+.wmarks { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.wm { position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: rgba(246,193,119,.55); will-change: transform; }
+.wm[hidden] { display: none; }
+.wm-flag { position: absolute; top: 3px; left: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: auto; cursor: pointer;
+  background: #f6c177; color: #1a1d23; font: 600 10px/14px system-ui, sans-serif; padding: 0 5px 0 4px; border-radius: 0 3px 3px 0; }
+.wm-flag:hover { background: #ffd89a; }
+#toast.undo { pointer-events: auto; display: flex; align-items: center; gap: 12px; }
+#toast button { background: none; border: 1px solid #4a5262; border-radius: 6px; color: var(--accent); font-weight: 650; padding: 2px 10px; cursor: pointer; }
+#toast button:hover { border-color: var(--accent); }
+#sim-banner { flex: none; display: flex; align-items: center; gap: 10px; padding: 7px 14px; background: rgba(246,193,119,.07); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+#sim-banner[hidden] { display: none; }
+#sim-banner b { color: var(--text); font-weight: 600; }
+#sim-banner .grow { flex: 1; }
+#sim-banner button { height: 26px; padding: 0 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); font-size: 12px; }
+#sim-banner button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ------------------------------------------------------------- hidden folders */
+.tree-row .hide-btn { display: inline-grid; place-items: center; width: 20px; height: 18px; margin-left: 2px; padding: 0; border: 0; background: none; color: var(--dim); cursor: pointer; border-radius: 4px; visibility: hidden; flex: none; }
+.tree-row:hover .hide-btn, .tree-row .hide-btn.on { visibility: visible; }
+.tree-row .hide-btn:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.tree-row .hide-btn.on { color: var(--warn); }
+.tree-row .hide-btn.inherited { visibility: visible; opacity: .4; cursor: default; }
+.tree-row.hidden-folder > .lbl { opacity: .5; font-style: italic; }
+.set-text { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 12px/1.45 ui-monospace, Consolas, monospace; resize: vertical; }
+.set-text:focus { outline: none; border-color: var(--accent); }
+.set-tricks { display: flex; flex-direction: column; gap: 4px; line-height: 1.5; }
+.set-tricks code { color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 11.5px; }

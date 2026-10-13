@@ -64,6 +64,11 @@ export class WaveView {
     this.specPalette = 'audition';
     this.lut = null;
     this.rowCache = null;
+    // Markers: [{ frame, name }], drawn as flags in the ruler with a line down the lanes.
+    this.markers = [];
+    this.markEl = document.createElement('div');
+    this.markEl.className = 'wmarks';
+    this.wrap.appendChild(this.markEl);
     new ResizeObserver(() => this.resize()).observe(this.wrap);
     this.bind();
   }
@@ -85,8 +90,10 @@ export class WaveView {
     this.solo = [];
     this.levels = null;
     this.spec = { overview: null, detail: null };
+    this.markers = [];
     this.buildLabels();
     this.updateSel();
+    this.updateMarkers();
     this.draw();
   }
 
@@ -101,7 +108,9 @@ export class WaveView {
     this.message = message;
     this.labels.innerHTML = '';
     this.meterEls = [];
+    this.markers = [];
     this.updateSel();
+    this.updateMarkers();
     this.setPlayhead(null);
     this.draw();
   }
@@ -199,6 +208,7 @@ export class WaveView {
     this.v0 = v0;
     this.v1 = v0 + span;
     this.updateSel();
+    this.updateMarkers();
     this.draw();
     this.cb.view && this.cb.view(this.v0, this.v1);
   }
@@ -224,7 +234,37 @@ export class WaveView {
       this.dbscale.height = Math.round(Math.max(1, this.dbscale.clientHeight) * dpr);
     }
     this.updateSel();
+    this.updateMarkers();
     this.draw();
+  }
+
+  setMarkers(list) {
+    this.markers = Array.isArray(list) ? list : [];
+    this.updateMarkers();
+  }
+
+  updateMarkers() {
+    const box = this.markEl, ms = this.frames ? this.markers : [];
+    while (box.children.length > ms.length) box.lastChild.remove();
+    while (box.children.length < ms.length) {
+      const el = document.createElement('div');
+      el.className = 'wm';
+      el.innerHTML = '<span class="wm-flag"></span>';
+      const i = () => [...box.children].indexOf(el);
+      const flag = el.firstChild;
+      flag.addEventListener('mousedown', e => e.stopPropagation()); // not a waveform click / drag
+      flag.addEventListener('click', e => { e.stopPropagation(); this.cb.marker && this.cb.marker(i()); });
+      flag.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); this.cb.markerMenu && this.cb.markerMenu(i()); });
+      box.appendChild(el);
+    }
+    const W = this.W;
+    ms.forEach((m, k) => {
+      const el = box.children[k], x = this.xAt(m.frame);
+      el.hidden = !(x >= 0 && x <= W);
+      el.style.transform = `translateX(${Math.round(x)}px)`;
+      if (el.firstChild.textContent !== m.name) { el.firstChild.textContent = m.name; el.firstChild.title = `${m.name} · ${fmtTime(m.frame / this.sr, true)}
+Click: play from here · Right-click: rename / delete`; }
+    });
   }
 
   // ---------------------------------------------------------------- drawing
@@ -580,19 +620,26 @@ export class WaveView {
     return (this.lut = lut);
   }
 
-  // For each pixel row of a lane (top = highest frequency): the FFT bins it covers.
+  // For each pixel row of a lane (top = highest frequency): the FFT bins it covers. Rows narrower
+  // than a bin (the lows on a log scale) blend the two nearest bins instead of repeating one,
+  // so they don't show as blocks: fr[y] >= 0 is the blend amount between bins lo[y] and lo[y] + 1.
   specRows(h, sr, N) {
     const key = `${h}|${sr}|${N}|${this.specScale}`;
     if (this.rowCache && this.rowCache.key === key) return this.rowCache;
-    const nyq = sr / 2, binHz = sr / N, bins = N / 2 + 1, lo = new Uint16Array(h), hi = new Uint16Array(h);
+    const nyq = sr / 2, binHz = sr / N, bins = N / 2 + 1, lo = new Uint16Array(h), hi = new Uint16Array(h), fr = new Float32Array(h);
     const fAt = y => (this.specScale === 'linear' ? nyq * (1 - y / h) : 20 * Math.pow(nyq / 20, 1 - y / h));
     for (let y = 0; y < h; y++) {
       const fTop = fAt(y), fBot = fAt(y + 1);
+      if (fTop - fBot < binHz) {
+        const pos = Math.max(0, Math.min(bins - 1.001, (fTop + fBot) / 2 / binHz));
+        lo[y] = Math.floor(pos); hi[y] = lo[y]; fr[y] = pos - lo[y];
+        continue;
+      }
       let a = Math.round(fBot / binHz), b = Math.round(fTop / binHz);
       a = Math.max(0, Math.min(bins - 1, a)); b = Math.max(a, Math.min(bins - 1, b));
-      lo[y] = a; hi[y] = b;
+      lo[y] = a; hi[y] = b; fr[y] = -1;
     }
-    return (this.rowCache = { key, lo, hi, fAt });
+    return (this.rowCache = { key, lo, hi, fr, fAt });
   }
 
   paintSpectro(c, W, H, n, laneH, spp, anySolo, dpr) {
@@ -629,7 +676,9 @@ export class WaveView {
         }
         for (let y = 0; y < h; y++) {
           let m = 0;
-          for (let k = rows.lo[y]; k <= rows.hi[y]; k++) if (merged[k] > m) m = merged[k];
+          const fy = rows.fr[y];
+          if (fy >= 0) { const k = rows.lo[y]; m = Math.round(merged[k] + (merged[k + 1] - merged[k]) * fy); }
+          else for (let k = rows.lo[y]; k <= rows.hi[y]; k++) if (merged[k] > m) m = merged[k];
           px[y * W + x] = lut[m];
         }
       }

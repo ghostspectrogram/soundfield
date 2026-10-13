@@ -11,6 +11,7 @@ import { metaCategory, TYPES, TYPE_LABELS } from '../../shared/categorize.mjs';
 import { RELEASES, unseenReleases } from './whats-new.js';
 import SAFETY_DEFAULTS from '../../shared/safety.json' with { type: 'json' };
 import { loudnessWeights } from '../../shared/loudness.mjs';
+import { Searcher, parseSearch, parseUserSynonyms, SYNONYMS, vocabulary } from './search.js';
 
 const $ = s => document.querySelector(s);
 const api = window.api;
@@ -37,6 +38,9 @@ const S = {
   recs: {},
   sep: '\\',
   favorites: new Set(),
+  mine: { sounds: {}, recent: [] }, // your notes, ratings, markers + recently played (sounds.json)
+  rating: '', // star filter: '' or the lowest rating shown
+  similar: null, // { of, items } while Find similar is showing
   overrides: {},
   items: [],
   view: [],
@@ -149,7 +153,7 @@ function assignType(it) {
   }
   it.type = type || 'unsorted';
   it.typeSrc = src;
-  it.hay = it.zip ? it.hay0 : `${it.hay0} ${TYPE_LABELS[it.type].toLowerCase()}`;
+  it.hay = it.zip ? it.hay0 : `${it.hay0} ${TYPE_LABELS[it.type].toLowerCase()}${mineText(it)}`;
 }
 
 // A stable colour per category: a few fixed, the rest spread around the hue wheel.
@@ -165,7 +169,8 @@ function typeColor(id) {
 // The sidebar lists only the categories that have sounds, alphabetically.
 function refreshTypeCounts() {
   const n = {};
-  for (const it of S.items) if (!it.zip) n[it.type] = (n[it.type] || 0) + 1;
+  const hide = prefs.hiddenFolders.length > 0;
+  for (const it of S.items) if (!it.zip && !(hide && isHiddenItem(it))) n[it.type] = (n[it.type] || 0) + 1;
   const ids = TYPES.filter(t => n[t] || S.types.has(t));
   if (n.unsorted || S.types.has('unsorted')) ids.push('unsorted');
   const box = $('#types');
@@ -191,22 +196,25 @@ function rebuildItems() {
   const out = [];
   for (const lib of S.libs) for (const rec of S.recs[lib.id] || []) out.push(makeItem(lib, rec));
   S.items = out;
+  searcher.vocabChanged();
   for (const lib of S.libs) S.trees.set(lib.id, buildTree(S.recs[lib.id] || []));
 }
 
 // ------------------------------------------------------------------ filtering
-function parseQuery(q) {
-  const inc = [], exc = [];
-  for (const m of q.toLowerCase().match(/"[^"]+"|\S+/g) || []) {
-    const t = m.replace(/^-?"|"$/g, '').replace(/^"/, '');
-    if (m.startsWith('-') && m.length > 1) exc.push(m.slice(1).replace(/"/g, ''));
-    else if (t) inc.push(t);
-  }
-  return { inc, exc };
+// Synonyms (built in + yours from Settings → Search) and typo tolerance; see search.js.
+const searcher = new Searcher({ vocab: () => vocabulary(S.items.map(it => it.hay)) });
+function applySearchPrefs() {
+  const groups = prefs.searchSynonyms === false ? [] : SYNONYMS.concat(parseUserSynonyms(prefs.userSynonyms));
+  searcher.setGroups(groups);
+  searcher.setTypos(prefs.searchTypos !== false);
 }
+const ratingOf = it => ((S.mine.sounds[it.path] || {}).r) || 0;
 
 function applyFilters({ keepScroll = false } = {}) {
-  const { inc, exc } = parseQuery(S.query);
+  const ps = parseSearch(S.query);
+  let match = searcher.matcher(ps);
+  const rmin = S.rating ? Number(S.rating) : 0;
+  const mineFilter = !!(rmin || ps.rating || ps.has.size);
   const sc = S.scope;
   const cls = S.classes;
   const sr = S.sr ? Number(S.sr) : 0;
@@ -214,43 +222,59 @@ function applyFilters({ keepScroll = false } = {}) {
   if (S.dur) { const [a, b] = S.dur.split('-'); dmin = Number(a); dmax = b ? Number(b) : Infinity; }
   // Folder browsing: subfolders + this folder's own sounds. Any search or filter
   // looks through everything inside the current folder instead, like Explorer.
-  const searching = !!(inc.length || exc.length || cls.size || S.types.size || sr || S.dur);
+  const searching = !!(ps.terms.length || ps.exc.length || mineFilter || cls.size || S.types.size || sr || S.dur);
   const browse = browsing() && !searching;
-  const out = [];
+  const out = [], loose = []; // loose: found through a synonym or a typo, listed after exact matches
   // A project only needs its own sounds looked at, not the whole library.
-  const pool = sc.type === 'proj' ? projectItems(projectById(sc.id)) : S.items;
-  for (const it of pool) {
-    if (sc.type === 'fav' && !S.favorites.has(it.path)) continue;
-    if (sc.type === 'dups' && (S.dupChooser || !(S.dupes && S.dupes.byPath.has(it.path)))) continue;
-    if (sc.type === 'folder') {
-      if (it.lib.id !== sc.lib) continue;
-      if (sc.prefix && it.folder !== sc.prefix && !it.folder.startsWith(sc.prefix + '/')) continue;
+  const pool = sc.type === 'proj' ? projectItems(projectById(sc.id)) : sc.type === 'recent' ? recentItems() : sc.type === 'similar' ? (S.similar ? S.similar.items : []) : S.items;
+  const ordered = sc.type === 'recent' || sc.type === 'similar'; // keep their own order
+  const hideOn = sc.type === 'all' && prefs.hiddenFolders.length > 0;
+  let hiddenN = 0;
+  const scan = () => {
+    for (const it of pool) {
+      if (hideOn && isHiddenItem(it)) { hiddenN++; continue; }
+      if (sc.type === 'fav' && !S.favorites.has(it.path)) continue;
+      if (sc.type === 'dups' && (S.dupChooser || !(S.dupes && S.dupes.byPath.has(it.path)))) continue;
+      if (sc.type === 'folder') {
+        if (it.lib.id !== sc.lib) continue;
+        if (sc.prefix && it.folder !== sc.prefix && !it.folder.startsWith(sc.prefix + '/')) continue;
+      }
+      if (browse && (sc.type === 'all' || it.folder !== (sc.prefix || ''))) continue;
+      if (cls.size && !cls.has(it.cls)) continue;
+      if (S.types.size && (it.zip || !S.types.has(it.type))) continue;
+      if (!it.zip) {
+        if (sr && (sr === 192000 ? it.rec.sr < 176400 : it.rec.sr !== sr)) continue;
+        if (S.dur && !(it.rec.dur >= dmin && it.rec.dur <= dmax)) continue;
+      } else if (sr || S.dur) continue;
+      if (mineFilter) {
+        const e = S.mine.sounds[it.path], r = (e && e.r) || 0;
+        if (r < rmin) continue;
+        if (ps.rating && (r < ps.rating[0] || r > ps.rating[1])) continue;
+        if (ps.has.has('note') && !(e && e.n)) continue;
+        if (ps.has.has('marker') && !(e && e.m && e.m.length)) continue;
+        if (ps.has.has('rating') && !r) continue;
+      }
+      const rank = match(it.hay);
+      if (rank === 2) out.push(it); else if (rank === 1) loose.push(it);
     }
-    if (browse && (sc.type === 'all' || it.folder !== (sc.prefix || ''))) continue;
-    if (cls.size && !cls.has(it.cls)) continue;
-    if (S.types.size && (it.zip || !S.types.has(it.type))) continue;
-    if (!it.zip) {
-      if (sr && (sr === 192000 ? it.rec.sr < 176400 : it.rec.sr !== sr)) continue;
-      if (S.dur && !(it.rec.dur >= dmin && it.rec.dur <= dmax)) continue;
-    } else if (sr || S.dur) continue;
-    let ok = true;
-    for (const t of inc) if (!it.hay.includes(t)) { ok = false; break; }
-    if (!ok) continue;
-    for (const t of exc) if (it.hay.includes(t)) { ok = false; break; }
-    if (ok) out.push(it);
-  }
-  if (sc.type === 'dups' && S.dupes) {
+  };
+  scan();
+  // Nothing found: try close spellings of the words ("explsion" → explosion).
+  if (!out.length && !loose.length && searcher.typos && ps.terms.some(x => !x.quoted && x.text.length >= 4)) { match = searcher.matcher(ps, true); hiddenN = 0; scan(); }
+  if (ordered) out.push(...loose);
+  else if (sc.type === 'dups' && S.dupes) {
     // Keep copies together, biggest space savings first.
     const bp = S.dupes.byPath;
     out.sort((a, b) => bp.get(a.path).g - bp.get(b.path).g || collator.compare(a.path, b.path));
-  } else sortItems(out);
+    out.push(...loose);
+  } else { sortItems(out); if (loose.length) out.push(...sortItems(loose)); }
   // A project also lists the sounds it can no longer find, so they can be relinked or removed.
   if (sc.type === 'proj') {
     const p = projectById(sc.id);
-    if (p && !(cls.size || S.types.size || sr || S.dur)) {
+    if (p && !(cls.size || S.types.size || sr || S.dur || mineFilter)) {
       for (const r of missingRefs(p)) {
         const m = missingItem(r);
-        if (inc.every(t => m.hay.includes(t)) && !exc.some(t => m.hay.includes(t))) out.push(m);
+        if (match(m.hay)) out.push(m);
       }
     }
   }
@@ -259,6 +283,7 @@ function applyFilters({ keepScroll = false } = {}) {
   S.view = view;
   renderDupBanner();
   renderProjBanner();
+  renderSimBanner();
   document.querySelectorAll('.proj-row[data-id]').forEach(r => r.classList.toggle('active', sc.type === 'proj' && sc.id === r.dataset.id));
   renderCrumbs(searching);
   if (!keepScroll) $('#list').scrollTop = 0;
@@ -268,10 +293,11 @@ function applyFilters({ keepScroll = false } = {}) {
   const idx = S.current ? view.indexOf(S.current) : -1;
   list.select(idx, false);
   S.countText = (folders.length ? `${folders.length.toLocaleString()} folder${folders.length === 1 ? '' : 's'} · ` : '') +
-    `${out.length.toLocaleString()} of ${S.items.length.toLocaleString()}`;
+    `${out.length.toLocaleString()} of ${S.items.length.toLocaleString()}` + (hiddenN ? ` · ${hiddenN.toLocaleString()} in hidden folders` : '');
   updateSelCount();
-  $('#n-all').textContent = S.items.length.toLocaleString();
+  $('#n-all').textContent = (prefs.hiddenFolders.length ? S.items.filter(it => !isHiddenItem(it)).length : S.items.length).toLocaleString();
   $('#n-fav').textContent = S.favorites.size ? S.favorites.size.toLocaleString() : '';
+  $('#n-recent').textContent = S.mine.recent.length ? S.mine.recent.length.toLocaleString() : '';
   $('#empty').hidden = S.libs.length > 0;
   refreshTypeCounts();
 }
@@ -288,12 +314,14 @@ function sortItems(arr) {
     bits: (a, b) => (a.rec.bits || 0) - (b.rec.bits || 0),
     desc: (a, b) => collator.compare(a.rec.desc || '￿', b.rec.desc || '￿'),
     lib: (a, b) => collator.compare(a.lib.name + '/' + a.folder, b.lib.name + '/' + b.folder) || collator.compare(a.name, b.name),
+    rate: (a, b) => ratingOf(a) - ratingOf(b),
   }[key] || ((a, b) => collator.compare(a.name, b.name));
   arr.sort((a, b) => by(a, b) * dir || collator.compare(a.name, b.name));
   document.querySelectorAll('#list-header [data-sort]').forEach(h => {
     h.classList.toggle('asc', h.dataset.sort === key && dir === 1);
     h.classList.toggle('desc', h.dataset.sort === key && dir === -1);
   });
+  return arr;
 }
 
 // ------------------------------------------------------------------ folder browsing
@@ -414,16 +442,19 @@ function renderMissingRow(row, it) {
 // ------------------------------------------------------------------ list rows
 function renderRow(row, it) {
   if (!row._built) {
-    row.innerHTML = '<div class="c-fav"><span class="star">★</span></div><div class="c-name"></div><div class="c-fmt"><span class="fmt"></span></div><div class="c-type"></div><div class="c-ch"></div><div class="c-dur"></div><div class="c-sr"></div><div class="c-bits"></div><div class="c-desc"></div><div class="c-lib"></div>';
+    row.innerHTML = '<div class="c-fav"><span class="star">★</span></div><div class="c-name"></div><div class="c-fmt"><span class="fmt"></span></div><div class="c-type"></div><div class="c-ch"></div><div class="c-dur"></div><div class="c-sr"></div><div class="c-bits"></div><div class="c-desc"></div><div class="c-lib"></div><div class="c-rate"></div>';
     row.draggable = true;
     row._built = true;
     row._c = [...row.children];
   }
+  if (it.isFolder || it.isMissing) { row._c[10].innerHTML = ''; row._c[10]._r = -1; }
   if (it.isFolder) { row.classList.remove('missing-row'); renderFolderRow(row, it); return; }
   if (it.isMissing) { renderMissingRow(row, it); return; }
   row.classList.remove('folder-row', 'missing-row');
   const c = row._c, r = it.rec;
   c[0].firstChild.classList.toggle('on', S.favorites.has(it.path));
+  const rt = canKeep(it) ? ratingOf(it) : -1;
+  if (c[10]._r !== rt) { c[10]._r = rt; c[10].innerHTML = rt < 0 ? '' : `<span class="stars${rt ? '' : ' none'}">${starsHtml(rt)}</span>`; }
   const dup = S.scope.type === 'dups' && S.dupes ? S.dupes.byPath.get(it.path) : null;
   row.classList.toggle('dup-b', !!dup && dup.g % 2 === 1);
   row.classList.toggle('dup-first', !!dup && dup.first);
@@ -498,6 +529,7 @@ async function loadItem(it, { play = false } = {}) {
   S.current = it;
   const token = ++S.token;
   engine.stop();
+  renderMine();
   S.loud = null;
   applyMatch(); // back to 0 dB until this sound's loudness is known
   S.selection = null;
@@ -599,10 +631,9 @@ function specZoomed() {
   const ov = wave.spec.overview, src = S.source;
   if (!ov || !src) return;
   const span = wave.v1 - wave.v0, W = $('#wave').width;
-  if (span / ((ov.end - ov.start) / ov.cols) >= W * 0.5) { specDetail.cancel(); wave.setSpectro('detail', null); return; } // the overview is sharp enough
+  if (span / ((ov.end - ov.start) / ov.cols) >= W) { specDetail.cancel(); wave.setSpectro('detail', null); return; } // the overview has a column per pixel already
   const d = wave.spec.detail;
-  if (d && d.start <= wave.v0 && d.end >= wave.v1 && (d.end - d.start) / d.cols <= (span / W) * 1.5) return; // detail still covers it
-  if (span * src.ch > 1.2e7) return; // too much audio to read for a detail view
+  if (d && d.start <= wave.v0 && d.end >= wave.v1 && (d.end - d.start) / d.cols <= span / W * 1.05) return; // detail still covers it
   const a = Math.max(0, wave.v0 - span * 0.25), b = Math.min(src.frames, wave.v1 + span * 0.25);
   specDetail.compute(src, 'detail', { start: a, end: b, cols: Math.ceil(W * 1.5 * (b - a) / span), perCol: 2, N: specN() }).catch(() => {});
 }
@@ -669,6 +700,7 @@ function setWaveFile(source, layout) {
   speakers.setMuteSolo([], []);
   fillLayoutSelect();
   $('#t-dur').textContent = fmtTime(source.frames / source.sr, true);
+  showMarkers();
 }
 
 function showZip(it) {
@@ -713,6 +745,7 @@ function togglePlay() {
 }
 
 engine.on('state', s => {
+  if (s.playing) addRecent(S.current);
   api.setBusy(s.playing); // background measuring pauses while something plays
   $('#player').classList.toggle('playing', s.playing);
   updateMonitorHint();
@@ -765,7 +798,7 @@ requestAnimationFrame(tick);
 
 // ------------------------------------------------------------------ meta panel + layout menu
 function renderMeta() {
-  const el = $('#file-meta');
+  const el = $('#meta-info');
   const it = S.current;
   if (!it) { el.innerHTML = ''; return; }
   const r = it.rec, info = S.info;
@@ -971,7 +1004,7 @@ const listEl = $('#list');
 listEl.addEventListener('mousedown', e => {
   const i = list.indexFromEvent(e);
   if (i < 0) return;
-  if (e.target.classList.contains('star')) return;
+  if (e.target.classList.contains('star') || e.target.classList.contains('rs')) return;
   if (e.button !== 0) return;
   const it = S.view[i];
   if (e.shiftKey) {
@@ -996,6 +1029,11 @@ listEl.addEventListener('mousedown', e => {
   selectIndex(i, { play: !!prefs.clickPlays }); // by default a click only selects and double-click plays (Settings → Playback)
 });
 listEl.addEventListener('click', e => {
+  if (e.target.classList.contains('rs')) {
+    const it = S.view[list.indexFromEvent(e)];
+    if (canKeep(it)) { const n = Number(e.target.dataset.n); setRating([it], n === ratingOf(it) ? 0 : n); }
+    return;
+  }
   if (!e.target.classList.contains('star')) return;
   const i = list.indexFromEvent(e);
   if (i >= 0 && !S.view[i].isFolder && !S.view[i].isMissing) toggleFavorite(S.view[i]);
@@ -1068,6 +1106,7 @@ listEl.addEventListener('contextmenu', async e => {
       { id: '', label: `${n.toLocaleString()} sounds selected (${fmtBytes(bytes)})`, enabled: false },
       { type: 'separator' },
       { label: `Add ${n.toLocaleString()} to project`, submenu: projSub },
+      ratingMenu(-1, 'm'),
       { id: 'mcopy', label: `Copy ${n.toLocaleString()} paths` },
       { id: 'mclear', label: 'Clear selection' },
       { type: 'separator' },
@@ -1077,6 +1116,7 @@ listEl.addEventListener('contextmenu', async e => {
     else if (pick === 'mclear') setMulti([]);
     else if (pick === 'mcopy') { api.copyText(sel.map(x => x.path).join('\r\n')); toast(`${n} paths copied`); }
     else if (pick === 'mproj:new') newProject(sel.filter(x => !x.zip));
+    else if (pick && pick.startsWith('mrate:')) setRating(sel, Number(pick.slice(6)));
     else if (pick && pick.startsWith('mproj:')) { const p = projectById(pick.slice(6)); if (p) addToProject(p, sel.filter(x => !x.zip)); }
     return;
   }
@@ -1086,7 +1126,7 @@ listEl.addEventListener('contextmenu', async e => {
   const fav = S.favorites.has(it.path);
   const items = it.zip
     ? [{ id: 'x-folder', label: `Extract to “${it.name}”` }, { id: 'x-here', label: 'Extract here' }, { type: 'separator' }]
-    : [{ id: 'play', label: 'Play' }, { id: 'fav', label: fav ? 'Remove from favorites' : 'Add to favorites' }, projectMenu(it),
+    : [{ id: 'play', label: 'Play' }, { id: 'fav', label: fav ? 'Remove from favorites' : 'Add to favorites' }, ratingMenu(ratingOf(it)), { id: 'similar', label: 'Find similar sounds' }, projectMenu(it),
       ...(curProj ? [{ id: 'proj:remove', label: `Remove from “${curProj.name}”` }] : []), { type: 'separator' }];
   items.push({ id: 'reveal', label: 'Show in Explorer' }, { id: 'copy', label: 'Copy path' });
   if (!it.zip) {
@@ -1150,6 +1190,8 @@ listEl.addEventListener('contextmenu', async e => {
   else if (pick === 'x-here') extract(it, 'here');
   else if (pick === 'play') { S.selection = null; wave.setSelection(null); startPlay(0); }
   else if (pick === 'fav') toggleFavorite(it);
+  else if (pick === 'similar') findSimilar(it);
+  else if (pick && pick.startsWith('rate:')) setRating([it], Number(pick.slice(5)));
   else if (pick === 'reveal') api.reveal(it.path);
   else if (pick === 'copy') { api.copyText(it.path); toast('Path copied'); }
 });
@@ -1259,6 +1301,49 @@ function pruneDupes() {
 // ------------------------------------------------------------------ duplicate exclusions
 // Folders (absolute paths) whose files are ignored by both duplicate searches.
 prefs.dupExclude = Array.isArray(prefs.dupExclude) ? prefs.dupExclude : [];
+
+// ------------------------------------------------------------------ hidden folders
+// Folders (or whole libraries) hidden from All sounds: their sounds stay out of All sounds, its
+// search, the category counts and Find similar, but opening the folder in Libraries still lists them.
+// Kept as { lib, prefix } (prefix '' = the whole library).
+prefs.hiddenFolders = Array.isArray(prefs.hiddenFolders) ? prefs.hiddenFolders : [];
+let hiddenMemo = null;
+function hiddenIndex() {
+  if (!hiddenMemo) {
+    hiddenMemo = new Map();
+    for (const h of prefs.hiddenFolders) { if (!hiddenMemo.has(h.lib)) hiddenMemo.set(h.lib, []); hiddenMemo.get(h.lib).push(h.prefix || ''); }
+  }
+  return hiddenMemo;
+}
+const underPrefix = (folder, p) => !p || folder === p || folder.startsWith(p + '/');
+function isHiddenItem(it) {
+  const ps = it.lib && hiddenIndex().get(it.lib.id);
+  return !!ps && ps.some(p => underPrefix(it.folder || '', p));
+}
+// 'self' when this folder is hidden, 'parent' when a folder above it is, otherwise ''.
+function folderHidden(libId, prefix) {
+  const ps = hiddenIndex().get(libId);
+  if (!ps) return '';
+  if (ps.includes(prefix)) return 'self';
+  return ps.some(p => p !== prefix && underPrefix(prefix, p)) ? 'parent' : '';
+}
+function setFolderHidden(lib, prefix, on) {
+  const before = prefs.hiddenFolders.slice();
+  prefs.hiddenFolders = prefs.hiddenFolders.filter(h => !(h.lib === lib.id && h.prefix === prefix));
+  if (on) prefs.hiddenFolders.push({ lib: lib.id, prefix });
+  hiddenMemo = null;
+  savePrefs();
+  renderTree();
+  applyFilters({ keepScroll: true });
+  const name = prefix ? prefix.split('/').pop() : lib.name;
+  toast(on ? `“${name}” is hidden from All sounds` : `“${name}” is back in All sounds`, 3000, () => {
+    prefs.hiddenFolders = before;
+    hiddenMemo = null;
+    savePrefs();
+    renderTree();
+    applyFilters({ keepScroll: true });
+  });
+}
 
 function folderPath(lib, prefix) {
   if (!prefix) return lib.path;
@@ -1461,6 +1546,7 @@ document.querySelectorAll('#list-header [data-sort]').forEach(h => h.addEventLis
 const COLS = [
   { key: 'fav', w: 30, fixed: true },
   { key: 'name', w: 320, min: 120 },
+  { key: 'rate', w: 84, min: 70 },
   { key: 'fmt', w: 78, min: 56 },
   { key: 'type', w: 120, min: 60 },
   { key: 'ch', w: 44, min: 34 },
@@ -1491,6 +1577,7 @@ const colText = {
   bits: it => String(it.rec.bits || ''),
   desc: it => it.rec.desc || '',
   lib: it => (it.folder ? `${it.lib.name} / ${it.folder}` : it.lib.name),
+  rate: () => '★★★★★',
 };
 const colExtra = { fmt: 18, type: 16 }; // badge padding / colour dot
 const measureCtx = document.createElement('canvas').getContext('2d');
@@ -1632,6 +1719,7 @@ function applyCustomLength() {
   S.dur = a == null && b == null ? '' : `${a ?? 0}-${b ?? ''}`;
   applyFilters();
 }
+$('#f-rating').addEventListener('change', e => { S.rating = e.target.value; applyFilters(); });
 $('#f-dur').addEventListener('change', e => {
   const custom = e.target.value === 'custom';
   $('#dur-custom').hidden = !custom;
@@ -1687,19 +1775,29 @@ function renderTree() {
     if (isDupExcluded(dir + S.sep + 'x')) return '<span class="excl inherited" title="Inside an excluded folder">⊘</span>';
     return '';
   };
+  // The eye: click to hide a folder from All sounds (or show it again).
+  const EYE = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+  const EYE_OFF = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1A10.4 10.4 0 0112 5c6.4 0 10 7 10 7a17 17 0 01-3.2 4M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.7 9.7 0 005.4-1.6M9.9 9.9a3 3 0 004.2 4.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  const hideMark = (lib, prefix) => {
+    const h = folderHidden(lib.id, prefix);
+    if (h === 'self') return `<button class="hide-btn on" data-hide="0" title="Hidden from All sounds. Click to show it there again">${EYE_OFF}</button>`;
+    if (h === 'parent') return `<span class="hide-btn inherited" title="Hidden from All sounds (a folder above it is)">${EYE_OFF}</span>`;
+    return `<button class="hide-btn" data-hide="1" title="Hide from All sounds (it stays listed here)">${EYE}</button>`;
+  };
   const walk = (lib, node, depth) => {
     const kids = [...node.children.values()].sort((a, b) => collator.compare(a.name, b.name));
     for (const k of kids) {
       const key = lib.id + ':' + k.path;
-      if (row('', depth, k.name, k.count, key, { type: 'folder', lib: lib.id, prefix: k.path }, k.children.size > 0, exclMark(lib, k.path))) walk(lib, k, depth + 1);
+      const hid = folderHidden(lib.id, k.path) ? 'hidden-folder' : '';
+      if (row(hid, depth, k.name, k.count, key, { type: 'folder', lib: lib.id, prefix: k.path }, k.children.size > 0, exclMark(lib, k.path) + hideMark(lib, k.path))) walk(lib, k, depth + 1);
     }
   };
   for (const lib of S.libs) {
     const tree = S.trees.get(lib.id) || { children: new Map(), count: 0 };
     const scanning = S.scans.has(lib.id);
-    const extra = exclMark(lib, '') + (scanning ? '<span class="spin" title="Scanning"></span>' : '') + (lib.offline ? '<span class="badge-off" title="Folder not reachable">offline</span>' : '');
+    const extra = exclMark(lib, '') + hideMark(lib, '') + (scanning ? '<span class="spin" title="Scanning"></span>' : '') + (lib.offline ? '<span class="badge-off" title="Folder not reachable">offline</span>' : '');
     const key = lib.id + ':';
-    const open = row('lib' + (lib.offline ? ' offline' : ''), 0, lib.name, tree.count, key, { type: 'folder', lib: lib.id, prefix: '' }, tree.children.size > 0, extra);
+    const open = row('lib' + (lib.offline ? ' offline' : '') + (folderHidden(lib.id, '') ? ' hidden-folder' : ''), 0, lib.name, tree.count, key, { type: 'folder', lib: lib.id, prefix: '' }, tree.children.size > 0, extra);
     if (open) walk(lib, tree, 1);
   }
   el.replaceChildren(frag);
@@ -1709,6 +1807,12 @@ function renderTree() {
 $('#lib-tree').addEventListener('click', e => {
   const r = e.target.closest('.tree-row');
   if (!r) return;
+  const hb = e.target.closest('button.hide-btn');
+  if (hb) {
+    const lib = S.libs.find(l => l.id === r._scope.lib);
+    if (lib) setFolderHidden(lib, r._scope.prefix || '', hb.dataset.hide === '1');
+    return;
+  }
   if (e.target.classList.contains('tw')) {
     const k = r.dataset.key;
     if (S.expanded.has(k)) S.expanded.delete(k); else S.expanded.add(k);
@@ -1740,6 +1844,10 @@ $('#lib-tree').addEventListener('contextmenu', async e => {
     { id: 'savehere', label: S.saveDir && S.saveDir.toLowerCase() === dir.toLowerCase() ? '✓  Soundfield search saves here' : 'Save Soundfield search downloads here' },
     { type: 'separator' }];
   const exact = prefs.dupExclude.some(f => f.toLowerCase() === dir.toLowerCase());
+  const hid = folderHidden(lib.id, sc.prefix || '');
+  if (hid === 'self') items.push({ id: 'unhide', label: 'Show in All sounds again' });
+  else if (hid === 'parent') items.push({ id: '', label: 'Hidden from All sounds (a folder above it is)', enabled: false });
+  else items.push({ id: 'hide', label: sc.prefix ? 'Hide this folder from All sounds' : 'Hide this library from All sounds' });
   if (exact) items.push({ id: 'dupinc', label: 'Include in duplicate search' });
   else if (isDupExcluded(dir + S.sep + 'x')) items.push({ id: '', label: 'Excluded from duplicates (a parent folder is)', enabled: false });
   else items.push({ id: 'dupx', label: 'Exclude from duplicate search' });
@@ -1760,6 +1868,7 @@ $('#lib-tree').addEventListener('contextmenu', async e => {
   const pick = await api.menu(items);
   if (pick === 'reveal') api.reveal(dir);
   else if (pick === 'savehere') onlineUI.setSaveDir(dir);
+  else if (pick === 'hide' || pick === 'unhide') setFolderHidden(lib, sc.prefix || '', pick === 'hide');
   else if (pick === 'dupx') setDupExcluded(dir, true);
   else if (pick === 'dupinc') setDupExcluded(dir, false);
   else if (pick === 'rescan') api.rescan(lib.id);
@@ -1881,12 +1990,15 @@ api.on('lib:updated', ({ lib, records }) => {
     const again = S.items.find(it => it.path === curPath);
     if (again) S.current = again;
   }
+  searcher.vocabChanged();
+  relinkMine();
   pruneDupes();
   renderProjects();
   renderTree();
   applyFilters({ keepScroll: true });
 });
 api.on('analysis:update', ({ id, map, done, total, finished }) => {
+  if (finished) featCache = null; // Find similar picks up the new measurements
   const a = (S.analysis[id] ||= {});
   Object.assign(a, map);
   if (finished) S.analyzing.delete(id); else if (total) S.analyzing.set(id, { done, total });
@@ -1951,6 +2063,8 @@ $('#scan-status').addEventListener('click', async e => {
 
 // ------------------------------------------------------------------ keyboard
 document.addEventListener('keydown', e => {
+  // Notes and marker names keep every key (Esc leaves the field).
+  if (e.target.closest && e.target.closest('#meta-mine') && e.target.matches('textarea, input')) { if (e.key === 'Escape') e.target.blur(); return; }
   const typing = !!(e.target.matches && e.target.matches('input[type=search], input[type=text]'));
   const k = e.key;
   const searchBox = S.mode === 'online' ? $('#o-search') : $('#search');
@@ -1990,6 +2104,8 @@ document.addEventListener('keydown', e => {
   }
   if (typing || e.target.tagName === 'SELECT') return;
   if (k === ' ') { e.preventDefault(); togglePlay(); return; }
+  if (e.ctrlKey && !e.altKey && k.toLowerCase() === 'z') { if (runUndo()) e.preventDefault(); return; }
+  if (e.ctrlKey && !e.altKey && /^[0-5]$/.test(k)) { e.preventDefault(); if (libKeys) setRating(rateTargets(), Number(k)); return; }
   if (libKeys && k === 'Home') return nav(-S.view.length);
   if (libKeys && k === 'End') return nav(S.view.length);
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
@@ -2012,6 +2128,7 @@ document.addEventListener('keydown', e => {
     if (p) addToProject(p, [S.current]); else newProject([S.current]);
   }
   else if (lk === 'z') wave.fit();
+  else if (lk === 'k' && libKeys) addMarker();
   else if (lk === 'v') setSpecView(!prefs.specView);
   else if (lk === 'm') { setMatch(!prefs.matchLoudness); toast(`Matched loudness ${prefs.matchLoudness ? 'on' : 'off'}`); }
   else if ((k === '[' || k === ']') && prefs.showVarispeed !== false) setVarispeed(variSt + (k === ']' ? 1 : -1), true);
@@ -2254,10 +2371,11 @@ function addToProject(p, items, quiet = false) {
 
 function removeFromProject(p, paths) {
   const gone = new Set(paths.map(lowPath));
+  const before = p.items;
   p.items = p.items.filter(r => !gone.has(lowPath(r.path)));
   saveProjects();
   applyFilters({ keepScroll: true });
-  toast(`Removed ${paths.length} from “${p.name}”`);
+  toast(`Removed ${paths.length} from “${p.name}”`, 3000, () => { p.items = before; saveProjects(); renderProjects(); applyFilters({ keepScroll: true }); });
 }
 
 // Find moved / renamed files again: same file name and size somewhere in the libraries.
@@ -2314,6 +2432,7 @@ async function exportProject(p, mode) {
   if (!p.items.length) { toast(`“${p.name}” is empty. Add some sounds first.`); return; }
   const zip = mode === 'zip';
   const size = fmtBytes(projectBytes(p).bytes);
+  const marked = p.items.filter(r => ((S.mine.sounds[r.path] || {}).m || []).length).length;
   const card = await modal({
     title: zip ? `Zip “${p.name}”` : `Materialize “${p.name}”`,
     sub: (zip
@@ -2327,6 +2446,7 @@ async function exportProject(p, mode) {
       </fieldset>
       <fieldset><legend>Extras</legend>
         <label><input type="checkbox" name="manifest" ${prefs.exportManifest !== false ? 'checked' : ''}><span>Include a list of original file locations</span></label>
+        ${marked ? `<label><input type="checkbox" name="markers" ${prefs.exportMarkers !== false ? 'checked' : ''}><span>Include your markers<small>_Markers.txt: ${marked} sound${marked === 1 ? '' : 's'} with markers, each time and name.</small></span></label>` : ''}
         ${zip ? '' : `<label><input type="checkbox" name="repoint" ${prefs.exportRepoint ? 'checked' : ''}><span>Point this project at the new copies<small>The new folder is added as a library so the copies show up here.</small></span></label>`}
       </fieldset>`,
     ok: zip ? 'Choose where to save…' : 'Choose destination…',
@@ -2335,15 +2455,18 @@ async function exportProject(p, mode) {
   const layout = card.querySelector('input[name=layout]:checked').value;
   const manifest = card.querySelector('input[name=manifest]').checked;
   const repoint = !zip && card.querySelector('input[name=repoint]').checked;
+  const markerList = !!card.querySelector('input[name=markers]:checked');
+  if (marked) prefs.exportMarkers = markerList;
   prefs.exportLayout = layout; prefs.exportManifest = manifest; if (!zip) prefs.exportRepoint = repoint;
   savePrefs();
   const items = p.items.map(r => {
     const it = byPath.get(lowPath(r.path));
-    return { path: r.path, rel: it ? `${it.lib.name}/${it.rec.rel}` : r.path.split(/[\\/]/).pop(), size: it ? it.rec.size || 0 : 0 };
+    const m = (S.mine.sounds[r.path] || {}).m;
+    return { path: r.path, rel: it ? `${it.lib.name}/${it.rec.rel}` : r.path.split(/[\\/]/).pop(), size: it ? it.rec.size || 0 : 0, ...(m && m.length ? { markers: m } : {}) };
   });
   let result;
   try {
-    result = await api.exportProject({ mode: zip ? 'zip' : 'copy', name: p.name, items, layout, manifest, repoint });
+    result = await api.exportProject({ mode: zip ? 'zip' : 'copy', name: p.name, items, layout, manifest, repoint, markerList });
   } catch (err) {
     toast(`${zip ? 'Zip' : 'Materialize'} failed: ${err.message || err}`, 6000);
     return;
@@ -2376,12 +2499,21 @@ async function deleteProject(p) {
     ok: 'Delete project', okClass: 'danger',
   });
   if (!card) return;
+  const at = S.projects.indexOf(p), wasLast = prefs.lastProject === p.id;
   S.projects = S.projects.filter(x => x !== p);
   if (S.scope.type === 'proj' && S.scope.id === p.id) S.scope = { type: 'all' };
   if (prefs.lastProject === p.id) { prefs.lastProject = null; savePrefs(); }
   saveProjects();
   renderTree();
   applyFilters();
+  toast(`Project “${p.name}” deleted`, 3000, () => {
+    S.projects.splice(Math.min(at, S.projects.length), 0, p);
+    if (wasLast) { prefs.lastProject = p.id; savePrefs(); }
+    saveProjects();
+    renderProjects();
+    renderTree();
+    applyFilters();
+  });
 }
 
 // Names of the search / filters currently narrowing the list.
@@ -2392,6 +2524,7 @@ function activeFilters() {
   if (S.classes.size) f.push('Sound Type');
   if (S.sr) f.push('rate');
   if (S.dur) f.push('length');
+  if (S.rating) f.push('rating');
   return f.length ? f : ['filters'];
 }
 
@@ -2405,6 +2538,8 @@ function clearAllFilters() {
   S.dur = '';
   $('#f-dur').value = '';
   $('#dur-custom').hidden = true;
+  S.rating = '';
+  $('#f-rating').value = '';
   if (S.classes.size) $('#dd-type-menu [data-act="none"]').click(); // also redraws the Sound Type button
   applyFilters();
 }
@@ -2454,6 +2589,13 @@ async function openExport(p, pick) {
 }
 
 // "Add to project ▸" submenu entries.
+// Rating submenu: ★ … ★★★★★ and Clear (r = the current rating, or -1 for several sounds).
+function ratingMenu(r, prefix = '') {
+  const sub = [1, 2, 3, 4, 5].map(n => ({ id: `${prefix}rate:${n}`, label: `${n === r ? '✓  ' : ''}${'★'.repeat(n)}   (Ctrl+${n})` }));
+  sub.push({ type: 'separator' }, { id: `${prefix}rate:0`, label: 'Clear rating   (Ctrl+0)', enabled: r !== 0 });
+  return { label: r > 0 ? `Rating: ${'★'.repeat(r)}` : 'Rating', submenu: sub };
+}
+
 function projectMenu(it) {
   const inIt = new Set((S.projIndex.get(lowPath(it.path)) || []).map(p => p.id));
   const sub = [...S.projects].sort((a, b) => collator.compare(a.name, b.name))
@@ -2699,6 +2841,8 @@ function applySetting(key, v) {
     case 'specScale': wave.setSpecScale(v); break;
     case 'specPalette': wave.setSpecPalette(v); break;
     case 'specFFT': startSpectro(); break;
+    case 'searchSynonyms': case 'searchTypos': case 'userSynonyms': applySearchPrefs(); if (S.query) applyFilters({ keepScroll: true }); break;
+    case 'recentMax': if (S.mine.recent.length > recentMax()) { S.mine.recent.length = recentMax(); saveMine(); applyFilters({ keepScroll: true }); } break;
     case 'outputDevice': engine.setSink(v).then(ok => { if (!ok) toast('That output device can’t be used right now; playing through the Windows default.', 5000); }); break;
   }
 }
@@ -2717,7 +2861,12 @@ async function applyOutputDevice() {
 const settingsUI = createSettings({
   api, prefs, savePrefs, apply: applySetting, toast, escapeHtml, fmtBytes,
   actions: {
-    prettyDir, setDupExcluded, showAbout,
+    prettyDir, setDupExcluded, showAbout, clearRecent,
+    recentCount: () => S.mine.recent.length,
+    hiddenFolders: () => prefs.hiddenFolders.map(h => {
+      const lib = S.libs.find(l => l.id === h.lib);
+      return { label: lib ? (h.prefix ? `${lib.name} / ${h.prefix.split('/').join(' / ')}` : `${lib.name} (whole library)`) : 'A removed library', show: () => { if (lib) setFolderHidden(lib, h.prefix, false); else { prefs.hiddenFolders = prefs.hiddenFolders.filter(x => x !== h); hiddenMemo = null; savePrefs(); } } };
+    }),
     accountStatus: which => onlineUI.accountStatus(which),
     openAccount: which => onlineUI.openAccount(which),
   },
@@ -2729,14 +2878,309 @@ document.addEventListener('keydown', e => { if (e.ctrlKey && e.key === ',') { e.
 window.addEventListener('error', e => api.logProblem(`${e.message} at ${e.filename}:${e.lineno}`));
 window.addEventListener('unhandledrejection', e => api.logProblem(`Unhandled: ${(e.reason && (e.reason.stack || e.reason.message)) || e.reason}`));
 
+// ------------------------------------------------------------------ your sounds
+// Notes, 1–5 star ratings and named markers per sound, and the sounds you played last. Kept by
+// Soundfield in sounds.json (the audio files are never changed), by path. Each entry also
+// remembers the file's name and size, so it follows a file that's moved to another folder.
+const mineKey = it => `${it.name}.${it.ext}|${it.rec.size || 0}`.toLowerCase();
+const canKeep = it => !!(it && !it.zip && !it.online && !it.isFolder && !it.isMissing);
+const markersOf = it => ((S.mine.sounds[it.path] || {}).m) || [];
+function mineText(it) {
+  const e = S.mine.sounds[it.path];
+  if (!e) return '';
+  let s = e.n ? ' ' + e.n.toLowerCase() : '';
+  if (e.m) for (const m of e.m) if (m[1]) s += ' ' + m[1].toLowerCase();
+  return s;
+}
+let mineSaveTimer = 0;
+function saveMine() {
+  clearTimeout(mineSaveTimer);
+  mineSaveTimer = setTimeout(() => api.saveMine(S.mine), 250);
+}
+// Changes one sound's entry; an entry with nothing left in it is dropped.
+function editMine(it, fn) {
+  const e = S.mine.sounds[it.path] || {};
+  fn(e);
+  if (!e.n && !e.r && !(e.m && e.m.length)) delete S.mine.sounds[it.path];
+  else { e.k = mineKey(it); S.mine.sounds[it.path] = e; }
+  assignType(it); // what search sees
+  searcher.vocabChanged();
+  saveMine();
+}
+// After a change: re-filter when the list depends on it, otherwise just redraw.
+function afterMineChange() {
+  if (S.rating || /(?:^|\s)(?:rating|stars?|has):/i.test(S.query) || S.query) applyFilters({ keepScroll: true }); else list.refresh();
+  renderMine();
+}
+
+// Entries whose file isn't where it was: found again by name and size, when exactly one file matches.
+function relinkMine() {
+  const have = itemsByPath();
+  const offline = S.libs.filter(l => l.offline).map(l => lowPath(l.path));
+  const lost = Object.keys(S.mine.sounds).filter(p => !have.has(lowPath(p)) && !offline.some(o => lowPath(p).startsWith(o)));
+  if (!lost.length) return 0;
+  const byKey = new Map();
+  for (const it of have.values()) { const k = mineKey(it); byKey.set(k, byKey.has(k) ? null : it); }
+  let moved = 0;
+  for (const p of lost) {
+    const e = S.mine.sounds[p], it = e.k && byKey.get(e.k);
+    if (!it || S.mine.sounds[it.path]) continue;
+    delete S.mine.sounds[p];
+    S.mine.sounds[it.path] = e;
+    for (const r of S.mine.recent) if (r[0] === p) r[0] = it.path;
+    assignType(it);
+    moved++;
+  }
+  if (moved) { searcher.vocabChanged(); saveMine(); }
+  return moved;
+}
+
+// ---- ratings (Ctrl+1…5, Ctrl+0 clears; or click the stars)
+const starsHtml = r => [1, 2, 3, 4, 5].map(n => `<span class="rs${n <= r ? ' on' : ''}" data-n="${n}">★</span>`).join('');
+function rateTargets() {
+  const sel = selectedItems().filter(canKeep);
+  return sel.length ? sel : canKeep(S.current) ? [S.current] : [];
+}
+function setRating(items, r) {
+  items = items.filter(canKeep);
+  if (!items.length) return;
+  const before = items.map(it => [it, ratingOf(it)]);
+  for (const it of items) editMine(it, e => { if (r) e.r = r; else delete e.r; });
+  afterMineChange();
+  const what = items.length === 1 ? `“${items[0].name}”` : `${items.length.toLocaleString()} sounds`;
+  toast(r ? `${what}: ${'★'.repeat(r)}` : `Rating cleared for ${what}`, 3000, () => {
+    for (const [it, v] of before) editMine(it, e => { if (v) e.r = v; else delete e.r; });
+    afterMineChange();
+  });
+}
+
+// ---- markers (K drops one at the playhead)
+function showMarkers() {
+  const it = S.current;
+  wave.setMarkers(canKeep(it) && S.source ? markersOf(it).map(([t, name]) => ({ frame: Math.round(t * S.source.sr), name })) : []);
+}
+function addMarker() {
+  const it = S.current;
+  if (!canKeep(it) || !S.source) return;
+  const f = engine.playing ? engine.position() : S.selection ? S.selection.start : S.cursor;
+  const t = Math.round((f / S.source.sr) * 1000) / 1000;
+  const n = markersOf(it).length + 1;
+  editMine(it, e => { e.m = (e.m || []).concat([[t, `Marker ${n}`]]).sort((a, b) => a[0] - b[0]); });
+  showMarkers();
+  renderMine();
+  toast(`Marker at ${fmtTime(t, true)}. Name it on the right, under Markers.`);
+}
+function renameMarker(it, i, name) {
+  const m = markersOf(it)[i];
+  if (!m || m[1] === name) return;
+  editMine(it, e => { e.m[i] = [m[0], name.slice(0, 120)]; });
+  showMarkers();
+}
+function deleteMarker(it, i) {
+  const old = markersOf(it).slice();
+  if (!old[i]) return;
+  editMine(it, e => { e.m = old.filter((_, k) => k !== i); });
+  showMarkers();
+  renderMine();
+  toast(`Marker “${old[i][1]}” deleted`, 3000, () => { editMine(it, e => { e.m = old; }); showMarkers(); renderMine(); });
+}
+function playMarker(i) {
+  const it = S.current, m = it && markersOf(it)[i];
+  if (!m || !S.source) return;
+  const f = Math.min(S.source.frames - 1, Math.round(m[0] * S.source.sr));
+  S.selection = null;
+  wave.setSelection(null);
+  S.cursor = f;
+  startPlay(f);
+}
+wave.on('marker', i => playMarker(i));
+wave.on('markerMenu', async i => {
+  const it = S.current, m = it && markersOf(it)[i];
+  if (!m) return;
+  const pick = await api.menu([{ id: 'play', label: 'Play from here' }, { id: 'rename', label: 'Rename…' }, { type: 'separator' }, { id: 'del', label: 'Delete marker' }]);
+  if (pick === 'play') playMarker(i);
+  else if (pick === 'rename') { const inp = document.querySelector(`#meta-mine .mk[data-i="${i}"] .mk-name`); if (inp) { inp.focus(); inp.select(); } }
+  else if (pick === 'del') deleteMarker(it, i);
+});
+
+// ---- recently played
+const recentMax = () => Math.max(10, Math.min(1000, Number(prefs.recentMax) || 100));
+function addRecent(it) {
+  if (!canKeep(it)) return;
+  const r = S.mine.recent;
+  const i = r.findIndex(x => x[0] === it.path);
+  if (i >= 0) r.splice(i, 1);
+  r.unshift([it.path, Date.now()]);
+  if (r.length > recentMax()) r.length = recentMax();
+  saveMine();
+  $('#n-recent').textContent = r.length.toLocaleString();
+  // The Recently played list itself isn't reordered while you're in it, so ↑ / ↓ keep their place.
+}
+function recentItems() {
+  const m = itemsByPath(), out = [];
+  for (const [p] of S.mine.recent) { const it = m.get(lowPath(p)); if (it) out.push(it); }
+  return out;
+}
+function clearRecent() {
+  const old = S.mine.recent.slice();
+  if (!old.length) return;
+  S.mine.recent = [];
+  saveMine();
+  applyFilters({ keepScroll: true });
+  toast(`Recently played cleared (${old.length.toLocaleString()})`, 3000, () => { S.mine.recent = old; saveMine(); applyFilters({ keepScroll: true }); });
+}
+$('.side-item[data-scope="recent"]').addEventListener('contextmenu', async e => {
+  e.preventDefault();
+  if (await api.menu([{ id: 'clear', label: 'Clear recently played', enabled: S.mine.recent.length > 0 }]) === 'clear') clearRecent();
+});
+
+// ---- the "yours" part of the info panel: rating, notes, markers, Find similar
+function renderMine() {
+  const el = $('#meta-mine');
+  const it = S.current;
+  if (!canKeep(it)) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  const e = S.mine.sounds[it.path] || {};
+  const r = e.r || 0, marks = e.m || [];
+  el.innerHTML = `<div class="mine-row"><span class="mine-l">Rating</span><span class="stars" title="Click a star, or Ctrl+1 … 5 (Ctrl+0 clears)">${starsHtml(r)}</span></div>
+    <textarea id="mine-notes" rows="3" maxlength="5000" placeholder="Your notes: searchable, never written into the file"></textarea>
+    <div class="mine-row"><span class="mine-l">Markers</span><button class="linkish" data-a="mark" title="Drop a marker at the playhead (K)">+ Add (K)</button></div>
+    ${marks.length ? `<div class="mk-list">${marks.map((m, i) => `<div class="mk" data-i="${i}"><button class="mk-t" title="Play from here">${fmtTime(m[0], true)}</button><input class="mk-name" type="text" value="${escapeHtml(m[1])}" maxlength="120" spellcheck="false" aria-label="Marker name"><button class="mk-x" title="Delete marker" aria-label="Delete marker">×</button></div>`).join('')}</div>` : ''}
+    <button class="mine-sim" data-a="similar" title="List the library sounds closest to this one">Find similar sounds</button>`;
+  el.querySelector('#mine-notes').value = e.n || '';
+}
+let noteTimer = 0, noteFor = null;
+function saveNote(it, text) {
+  clearTimeout(noteTimer);
+  const old = (S.mine.sounds[it.path] || {}).n || '';
+  const v = text.trim() ? text : '';
+  if (v === old) return;
+  editMine(it, e => { if (v) e.n = v; else delete e.n; });
+  if (S.query) applyFilters({ keepScroll: true });
+  if (!v && old) toast('Notes cleared', 3000, () => { editMine(it, e => { e.n = old; }); renderMine(); if (S.query) applyFilters({ keepScroll: true }); });
+}
+$('#meta-mine').addEventListener('input', e => {
+  if (e.target.id !== 'mine-notes') return;
+  const it = noteFor = S.current, v = e.target.value;
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => saveNote(it, v), 600);
+});
+$('#meta-mine').addEventListener('focusout', e => {
+  if (e.target.id === 'mine-notes' && noteFor) { saveNote(noteFor, e.target.value); noteFor = null; }
+  else if (e.target.classList.contains('mk-name')) {
+    const i = Number(e.target.closest('.mk').dataset.i);
+    if (S.current) renameMarker(S.current, i, e.target.value.trim() || `Marker ${i + 1}`);
+  }
+});
+$('#meta-mine').addEventListener('keydown', e => {
+  if (e.target.classList.contains('mk-name') && (e.key === 'Enter' || e.key === 'Escape')) { e.preventDefault(); e.target.blur(); }
+});
+$('#meta-mine').addEventListener('click', e => {
+  const it = S.current;
+  if (!canKeep(it)) return;
+  const star = e.target.closest('.rs');
+  if (star) { const n = Number(star.dataset.n); setRating([it], n === ratingOf(it) ? 0 : n); return; }
+  const a = e.target.closest('[data-a]');
+  if (a && a.dataset.a === 'mark') addMarker();
+  else if (a && a.dataset.a === 'similar') findSimilar(it);
+  const mk = e.target.closest('.mk');
+  if (mk && e.target.closest('.mk-t')) playMarker(Number(mk.dataset.i));
+  else if (mk && e.target.closest('.mk-x')) deleteMarker(it, Number(mk.dataset.i));
+});
+
+// ---- find similar sounds
+// Closest first, by the sound features the background listening measures (loudness over time,
+// noisiness, onsets, pitch…), plus category, name words and length. The sound itself is listed first.
+let featCache = null; // { feats: { libId: { rel: [...] } }, sd: [...] }, dropped when listening finds more
+const FEAT_WEIGHTS = [1, 0.6, 1, 1, 1.5, 1.2, 1, 1, 1, 1, 0.8];
+async function soundFeatures() {
+  if (featCache) return featCache;
+  const feats = await api.soundFeatures().catch(() => ({}));
+  // Spread of each feature across the library, so every one counts about the same.
+  const n = FEAT_WEIGHTS.length, sum = new Float64Array(n), sq = new Float64Array(n);
+  let count = 0;
+  for (const lib of Object.values(feats)) for (const f of Object.values(lib)) { count++; for (let i = 0; i < n; i++) { sum[i] += f[i] || 0; sq[i] += (f[i] || 0) ** 2; } }
+  const sd = Array.from({ length: n }, (_, i) => (count > 1 ? Math.sqrt(Math.max(0, sq[i] / count - (sum[i] / count) ** 2)) : 0) || 1);
+  return (featCache = { feats, sd });
+}
+const nameWords = it => new Set((it.name.toLowerCase().match(/[a-z]{3,}/g) || []));
+function similarTo(it, { feats, sd }, max = 150) {
+  const fOf = x => (feats[x.lib.id] || {})[x.rec.rel];
+  const fT = fOf(it), wT = nameWords(it), dT = it.rec.dur || 0;
+  const wsum = FEAT_WEIGHTS.reduce((a, b) => a + b, 0);
+  const scored = [];
+  for (const x of S.items) {
+    if (x === it || !canKeep(x) || isHiddenItem(x)) continue;
+    const f = fOf(x);
+    let d = 2.5; // audio not measured yet: name, category and length only
+    if (fT && f) {
+      let s = 0;
+      for (let i = 0; i < FEAT_WEIGHTS.length; i++) s += FEAT_WEIGHTS[i] * (((fT[i] || 0) - (f[i] || 0)) / sd[i]) ** 2;
+      d = Math.sqrt(s / wsum);
+    }
+    d += Math.min(2, 0.6 * Math.abs(Math.log2(((x.rec.dur || 0) + 0.05) / (dT + 0.05))));
+    if (x.type === it.type && it.type !== 'unsorted') d -= 0.5;
+    if (x.rec.ch !== it.rec.ch) d += 0.15;
+    if (wT.size) {
+      let shared = 0;
+      const w = nameWords(x);
+      for (const v of w) if (wT.has(v)) shared++;
+      if (shared) d -= 0.6 * shared / Math.max(wT.size, w.size);
+    }
+    scored.push([d, x]);
+  }
+  scored.sort((a, b) => a[0] - b[0]);
+  return { items: scored.slice(0, max).map(s => s[1]), how: fT ? 'audio' : 'meta' };
+}
+async function findSimilar(it) {
+  if (!canKeep(it)) return;
+  const res = similarTo(it, await soundFeatures());
+  const items = [it, ...res.items];
+  S.similar = { of: it, items, how: res.how };
+  if (S.multi.size) setMulti([]);
+  S.scope = { type: 'similar' };
+  renderTree();
+  applyFilters();
+  const i = S.view.indexOf(it);
+  if (i >= 0) list.select(i, true);
+}
+function renderSimBanner() {
+  const b = $('#sim-banner');
+  if (S.scope.type !== 'similar' || !S.similar) { b.hidden = true; return; }
+  b.hidden = false;
+  const note = S.similar.how === 'meta' ? ' · by name, category and length (this sound’s audio hasn’t been measured yet)' : '';
+  b.innerHTML = `<span>Sounds like <b>${escapeHtml(S.similar.of.name)}</b> · closest first${note}</span><span class="grow"></span><button data-a="close" title="Back to all sounds">Close</button>`;
+  b.querySelector('[data-a=close]').addEventListener('click', () => { S.similar = null; S.scope = { type: 'all' }; renderTree(); applyFilters(); });
+}
+
 // ------------------------------------------------------------------ toast
-let toastTimer = 0;
-function toast(msg, ms = 2600) {
+// A toast can offer Undo (also Ctrl+Z while it shows).
+let toastTimer = 0, toastUndo = null;
+function toast(msg, ms = 2600, undo = null) {
   const t = $('#toast');
   t.textContent = msg;
+  toastUndo = undo;
+  if (undo) {
+    const b = document.createElement('button');
+    b.textContent = 'Undo';
+    b.title = 'Ctrl+Z';
+    b.addEventListener('click', runUndo);
+    t.append(b);
+    ms = Math.max(ms, 6000);
+  }
+  t.classList.toggle('undo', !!undo);
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+  toastTimer = setTimeout(() => { t.classList.remove('show'); toastUndo = null; }, ms);
+}
+function runUndo() {
+  const u = toastUndo;
+  if (!u) return false;
+  toastUndo = null;
+  clearTimeout(toastTimer);
+  $('#toast').classList.remove('show');
+  u();
+  return true;
 }
 
 // ------------------------------------------------------------------ about + what's new
@@ -2808,6 +3252,8 @@ async function boot() {
   S.recs = st.records;
   S.sep = st.sep;
   S.favorites = new Set(st.favorites);
+  if (st.mine && st.mine.sounds && Array.isArray(st.mine.recent)) S.mine = st.mine;
+  applySearchPrefs();
   S.overrides = st.overrides || {};
   S.analysis = st.analysis || {};
   S.typeOverrides = st.typeOverrides || {};
@@ -2816,6 +3262,7 @@ async function boot() {
   rebuildProjIndex();
   applySidebarPrefs();
   rebuildItems();
+  relinkMine();
   renderTree();
   renderProjects();
   applyFilters();
@@ -2837,7 +3284,8 @@ async function boot() {
   setSpecView(!!prefs.specView);
   window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, savePrefs, openFolder, goUp, folderChain, excludingFolder, extraCopies,
     addToProject, removeFromProject, relinkProject, openProject, projectById, exportProject, renderProjects, saveProjects, setMode, onlineUI, loadOnline,
-    findDupes, showAbout, settingsUI, applySetting, setMatch, setVarispeed, setSpecView, setSpecRange, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
+    findDupes, showAbout, settingsUI, applySetting, setMatch, setVarispeed, setSpecView, setSpecRange,
+    setRating, ratingOf, addMarker, findSimilar, setFolderHidden, relinkMine, runUndo, clearRecent, isHiddenItem, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
   showWhatsNew();
 }
 boot();

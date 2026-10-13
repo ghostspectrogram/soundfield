@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld('api', {
   regionsInfo: () => ipcRenderer.invoke('regions:info'),
   getLoudness: (p, size, mtime) => ipcRenderer.invoke('loud:get', p, size, mtime),
   saveLoudness: (p, size, mtime, v) => ipcRenderer.send('loud:set', p, size, mtime, v),
+  saveMine: data => ipcRenderer.send('mine:save', data),
+  soundFeatures: () => ipcRenderer.invoke('analysis:features'),
   setBusy: on => ipcRenderer.send('app:busy', !!on),
   openRegions: () => ipcRenderer.invoke('regions:open'),
   clearPreviewCache: () => ipcRenderer.invoke('cache:clearPreviews'),

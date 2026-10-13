@@ -10,7 +10,7 @@ export const RELEASES = [
       'Music gets Key and BPM: pick Musical in the sidebar to see Key and BPM columns (click to sort) and BPM / Key filters at the top. They come from file names, or by ear for music files (marked ≈).',
       'Online → Music: search Freesound, Wikimedia Commons and Internet Archive for CC0 / public-domain music, with Key and BPM columns and filters. Saved music goes into a Music folder and is sorted as Musical.',
       'The total size of your libraries is shown next to Libraries (hover a library for its own size).',
-      'Epidemic files (ES_…) and folders whose CREDITS.txt mentions Epidemic are never listened to.',
+      'Epidemic files (ES_…) and folders whose CREDITS.txt mentions Epidemic are left out of background sorting by ear. They still play and show their waveforms as usual.',
     ],
   },
   {

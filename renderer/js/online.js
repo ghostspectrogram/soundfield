@@ -52,6 +52,7 @@ export function createOnline(ctx) {
   const $ = s => document.querySelector(s);
   const O = { query: '', page: 1, results: [], view: [], seen: new Set(), more: {}, errors: {}, totals: {}, via: '', loading: false, tok: 0, progress: new Map(), sort: null, settings: null };
 
+  O.emptyHtml = $('#o-empty p').innerHTML; // the sound effects wording, from index.html
   const listEl = $('#o-list');
   listEl.tabIndex = 0;
   const list = new VList(listEl, { rowHeight: 26, render: renderRow });
@@ -194,6 +195,10 @@ export function createOnline(ctx) {
       : music()
         ? 'CC0 and public-domain music you can preview and save, no credit needed. Saved music goes in a Music folder and is sorted as Musical.'
         : 'Sounds you can preview here and save straight into Soundfield, no credit needed: CC0, public domain, and Epidemic Sound through your subscription.';
+    $('#o-empty h2').textContent = music() ? 'Find free music' : 'Find free sound effects';
+    $('#o-empty p').innerHTML = music()
+      ? 'Search Freesound, Wikimedia Commons and the Internet Archive for CC0 and public-domain music: use it in anything, including paid work, with no credit needed. Key and BPM show when the title, tags or the site give them. <b>Save</b> puts it in a Music folder in your save folder and notes where it came from in <i>Credits.txt</i>.'
+      : O.emptyHtml;
     input.placeholder = w ? 'Search sound sites…  e.g.  bees' : music() ? 'Search free music, then press Enter…  e.g.  lofi piano' : 'Search free sound effects, then press Enter…  e.g.  bees';
     $('#o-web').hidden = !w;
     $('#o-header').hidden = w;

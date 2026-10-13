@@ -249,10 +249,10 @@ export class ChunkedSource {
   }
 
   // Waveform peaks: one pass over every piece, without keeping them.
-  async peaks(jobId, onProgress) {
-    if (this.full) return this.full.peaks(jobId, onProgress);
+  async peaks(jobId, onProgress, opts) {
+    if (this.full) return this.full.peaks(jobId, onProgress, opts);
     const run = ++peakRun;
-    const pb = new PeakBuilder(this.ch, this.frames, bucketFor(this.frames));
+    const pb = new PeakBuilder(this.ch, this.frames, bucketFor(this.frames), opts && opts.loud);
     let last = performance.now();
     for (let k = 0; k < this.idx.segs.length; k++) {
       if (run !== peakRun) return null; // another sound was opened

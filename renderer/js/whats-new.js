@@ -2,6 +2,17 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.5',
+    date: '2026-10-13',
+    items: [
+      'Varispeed, tape-style: the speed slider next to the volume changes speed and pitch together, ±12 semitones ([ / ] keys, double-click resets). Dragged files keep their original speed. Can be hidden in Settings → Playback.',
+      'MATCH (key M) plays every sound at the same perceived loudness while you audition, so quiet and loud files compare fairly. Your files aren’t changed; the target is in Settings → Playback.',
+      'The info panel shows each sound’s loudness (LUFS) and true peak. It’s measured while the waveform loads, and short sounds are measured in the background while nothing is playing.',
+      'SPECTRO (key V) shows frequencies over time instead of the waveform, sharpening as you zoom in. The level range slider beside it starts at 130 dB and stays where you leave it; scale, detail and colours are in Settings → Waveform.',
+      'The transport bar fits smaller windows: labels make way first, then the sliders get shorter.',
+    ],
+  },
+  {
     version: '0.2.0-beta.4',
     date: '2026-10-13',
     items: [

@@ -42,6 +42,8 @@ The app icon lives in `build/icon.ico` / `build/icon.png`. It's drawn by `tools/
 | `lib/scan-worker.js`, `lib/peaks-worker.mjs`, `lib/analyze-worker.mjs`, `lib/dupes-worker.js` | Background workers: library scan, waveform peaks, listening-based categorising, duplicate detection |
 | `lib/region.js`, `lib/zip.js`, `lib/store.js` | Selection-to-WAV export (keeps channel mask + metadata), zip counting / extraction, JSON persistence |
 | `shared/pcm.mjs` | PCM decoding (8/16/24/32-bit int, 32/64-bit float, LE/BE) and incremental min/max/RMS peak building |
+| `shared/loudness.mjs` | BS.1770 loudness meter: K-weighting, gated integrated LUFS, true peak |
+| `shared/spectro.mjs`, `renderer/js/spectro.js`, `renderer/js/spectro-worker.js` | Spectrogram FFTs (max-pooled columns, one byte per level) and the worker that computes them |
 | `shared/categorize.mjs` | UCS / Epidemic-style categories from names and metadata, plus audio feature analysis |
 | `renderer/js/layouts.js` | Channel-layout detection and monitoring matrices: Lo/Ro downmix, binaural virtual speakers, AmbiX/FuMa decoding up to 3rd order |
 | `renderer/js/engine.js`, `renderer/worklet/player.js` | Streaming multichannel playback engine (AudioWorklet), one AudioContext per sample rate, optional output device |
@@ -68,6 +70,8 @@ const { writeRegionSync } = require('soundfield/region');
 // ES modules (Node for the .mjs files, or any bundler / browser)
 import { decodePcm, PeakBuilder, bucketFor } from 'soundfield/pcm';
 import { metaCategory, TYPE_LABELS } from 'soundfield/categorize';
+import { LoudnessMeter } from 'soundfield/loudness'; // LUFS + true peak: new LoudnessMeter(sr, ch).push(planar, n) … .result()
+import { SpectroBuilder, planWindows } from 'soundfield/spectro';
 
 // Browser-side modules (use a bundler such as Vite or webpack)
 import { detectLayout, buildMonitor } from 'soundfield/layouts';
@@ -200,8 +204,12 @@ The sidebar lists the categories that have sounds. Click one to filter (Ctrl-cli
 - Each channel lane has Mute/Solo buttons and a meter. Click a speaker in the map to solo it. For ambisonic files, the map shows the direction the energy is coming from.
 
 ## Waveform
-- **How loud is it?** The **dB** column left of the waveform is a level scale from 0 dBFS (lane edge) to −40 dBFS (centre line), and ▸ marks each channel's peak. Each lane label shows that channel's peak (red at −1 dB or louder), and the info panel shows the file's **Peak** and **RMS** (average level) in dBFS. All of it is measured as soon as the waveform loads, before you play anything.
+- **How loud is it?** The **dB** column left of the waveform is a level scale from 0 dBFS (lane edge) to −40 dBFS (centre line; −60 in Settings → Waveform), and ▸ marks each channel's peak. Each lane label shows that channel's peak (red at −1 dB or louder), and the info panel shows the file's **Peak** and **RMS** (average level) in dBFS. All of it is measured as soon as the waveform loads, before you play anything.
 - **Even scale:** the waveform is drawn on that −40 … 0 dB scale, so every 5 dB is the same distance and quiet detail stays visible. Labels go every 5 dB when the lanes are tall enough, otherwise every 10 or 20 dB. Alt+wheel still zooms vertically, and the scale follows.
+- **Loudness:** the info panel also shows **Loudness** (integrated LUFS, EBU R128 / BS.1770) and **True peak** (dBTP, 4× oversampled). They're measured in the same pass as the waveform; short sounds are measured in the background while nothing plays, and results are kept in `loudness.json`.
+- **MATCH** (`M`) plays every sound at the same loudness (default −20 LUFS, Settings → Playback), turning quiet sounds up only as far as −1 dBTP. Only the preview changes, never the file.
+- **Varispeed** (`[` / `]`, ±12 semitones): tape-style, so speed and pitch move together. Double-click the slider to reset. Every launch starts at normal speed, and dragged files keep their original speed.
+- **SPECTRO** (`V`) swaps the waveform for a spectrogram: an overview of the whole sound, then a sharper picture of the visible part when you zoom in. Each column keeps the loudest level in it, so short clicks still show. The **level range** slider (60–160 dB, default 130) is remembered; frequency scale, detail (FFT size) and colours are under Settings → Waveform. Computed in a background worker.
 - Click to play from that point. Drag to select, and the selection plays.
 - Drag the selection, the **Drag to DAW** handle, or any list row into your DAW. Selections are written as new WAVs (keeping the channel layout and metadata) in `Documents\Soundfield Regions`.
 - Wheel: zoom · Shift+wheel: scroll · Alt+wheel: vertical zoom · Double-click / `Z`: zoom to fit.
@@ -216,6 +224,9 @@ The sidebar lists the categories that have sounds. Click one to filter (Ctrl-cli
 | `-` / `=` | Preview volume −/+ 1 dB (also mouse wheel over the slider) |
 | `1`–`9` / `0` | Solo channel *n* / clear solos |
 | `L` / `A` / `B` | Loop / auto-play / toggle binaural |
+| `M` | Matched loudness on / off |
+| `[` / `]` | Varispeed down / up a semitone |
+| `V` | Waveform / spectrogram |
 | `F` | Favorite |
 | Ctrl+F or `/` | Search (`-word` excludes, `"exact phrase"` matches a phrase) |
 | Shift-click / Shift+↑↓ | Select every sound between the last one clicked and this one |

@@ -370,6 +370,19 @@ button.primary:hover { filter: brightness(1.1); }
   display: flex; align-items: center; gap: 8px;
   height: 48px; padding: 0 12px; flex: none;
   border-bottom: 1px solid var(--line);
+  container-type: inline-size; overflow: hidden;
+}
+#transport > * { flex-shrink: 0; }
+/* Narrower windows: labels go first (each control keeps its tooltip), then the sliders get shorter. */
+@container (max-width: 1640px) {
+  #transport .sel-wrap > span, #transport .vari-l, #transport .spec-range > span, #transport .vari-pct { display: none; }
+  #transport .vol input { width: 110px; }
+}
+@container (max-width: 1380px) {
+  #transport #drag-handle span { display: none; }
+  #transport .vol input, #transport .vari input { width: 80px; }
+  #transport .spec-range input { width: 70px; }
+  #transport .sel-wrap select { max-width: 130px; }
 }
 .tbtn {
   height: 30px; min-width: 30px; padding: 0 8px;
@@ -394,6 +407,16 @@ button.primary:hover { filter: brightness(1.1); }
 .vol input { width: 150px; }
 #vol-db { width: 58px; text-align: right; font: 12px ui-monospace, Consolas, monospace; color: var(--text); }
 #vol-db.hot { color: var(--warn); }
+.vari input { width: 110px; }
+.vari-l { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--dim); }
+#vari-val { min-width: 40px; text-align: right; font: 12px ui-monospace, Consolas, monospace; color: var(--muted); white-space: nowrap; }
+.vari.on { border-color: rgba(246,173,85,.6); }
+.vari.on #vari-val, .vari.on .vari-l { color: var(--warn); }
+.vari[hidden] { display: none; }
+.spec-range { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.spec-range[hidden] { display: none; }
+.spec-range input { width: 90px; }
+.spec-range b { min-width: 48px; font: 12px ui-monospace, Consolas, monospace; color: var(--text); text-transform: none; letter-spacing: 0; }
 input[type=range] { -webkit-appearance: none; appearance: none; height: 18px; background: transparent; cursor: pointer; }
 input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--accent) var(--fill, 83%), #2a303b var(--fill, 83%)); }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: #e3e7ee; border: 2px solid var(--bg); box-shadow: 0 0 0 1px #4a5262; }

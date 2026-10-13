@@ -28,6 +28,8 @@ export class Engine {
     this.iv = null;
     this.listeners = {};
     this.sinkId = ''; // output device ('' = the system default)
+    this.rate = 1;    // varispeed
+    this.trimDb = 0;  // matched-loudness gain for the current sound
   }
 
   // Plays through a specific output device (from enumerateDevices); '' = the system default.
@@ -55,7 +57,7 @@ export class Engine {
     if (!e) {
       const ctx = new AudioContext({ sampleRate: sr, latencyHint: 'interactive', ...(this.sinkId ? { sinkId: this.sinkId } : {}) });
       const master = ctx.createGain();
-      master.gain.value = dbToGain(this.volumeDb);
+      master.gain.value = this.outGain();
       master.connect(ctx.destination);
       e = { ctx, master, ready: ctx.audioWorklet.addModule(this.workletUrl) };
       this.ctxs.set(sr, e);
@@ -101,7 +103,19 @@ export class Engine {
 
   setVolume(db) {
     this.volumeDb = db;
-    const g = dbToGain(db);
+    this.applyGain();
+  }
+
+  // Extra gain for the current sound (matched-loudness preview), on top of the volume.
+  setTrim(db) {
+    this.trimDb = Number(db) || 0;
+    this.applyGain();
+  }
+
+  outGain() { return dbToGain(this.volumeDb) * Math.pow(10, this.trimDb / 20); }
+
+  applyGain() {
+    const g = this.outGain();
     for (const e of this.ctxs.values()) e.master.gain.setTargetAtTime(g, e.ctx.currentTime, 0.012);
   }
 
@@ -205,7 +219,7 @@ export class Engine {
     if (re - rs < 1024) loop = false;
     let start = Math.floor(from);
     if (start < rs || start >= re) start = rs;
-    this.feed = { gen, cursor: start, rs, re, loop, region, sent: 0, consumed: 0, eos: false, busy: false };
+    this.feed = { gen, cursor: start, rs, re, loop, region, rate: this.rate, sent: 0, consumed: 0, eos: false, busy: false };
     g.node.port.postMessage({ type: 'play', gen });
     this.playing = true;
     this.pos = start;
@@ -239,17 +253,19 @@ export class Engine {
     try {
       while (this.feed === f && !f.eos && f.sent - f.consumed < sr * (src.streaming || src.lazy ? 1.5 : 0.75)) {
         const chunk = f.sent === 0 ? Math.round(sr * 0.1) : Math.round(sr * 0.5);
-        const n = Math.min(chunk, f.re - f.cursor);
+        const rate = f.rate || 1;
+        // Output frames for this chunk: at varispeed each one uses `rate` source frames.
+        const n = Math.min(chunk, Math.floor((f.re - f.cursor) / rate));
         if (n <= 0) {
           if (f.loop) { f.cursor = f.rs; continue; }
           f.eos = true;
           this.graph.node.port.postMessage({ type: 'eos', gen: f.gen });
           break;
         }
-        const data = await src.readFrames(f.cursor, n);
+        const data = rate === 1 ? await src.readFrames(f.cursor, n) : await this.varispeed(src, f.cursor, n, rate);
         if (this.feed !== f || !this.graph) return;
-        this.graph.node.port.postMessage({ type: 'chunk', gen: f.gen, start: f.cursor, frames: n, data }, data.map(a => a.buffer));
-        f.cursor += n;
+        this.graph.node.port.postMessage({ type: 'chunk', gen: f.gen, start: f.cursor, frames: n, rate, data }, data.map(a => a.buffer));
+        f.cursor += n * rate;
         f.sent += n;
       }
     } catch (err) {
@@ -260,6 +276,35 @@ export class Engine {
     } finally {
       f.busy = false;
     }
+  }
+
+  // Tape-style varispeed: `n` output frames starting at source frame `pos` (fractional), reading
+  // the source `rate` times faster, with 4-point cubic (Hermite) interpolation.
+  async varispeed(src, pos, n, rate) {
+    const base = Math.floor(pos) - 1;
+    const readAt = Math.max(0, base);
+    const raw = await src.readFrames(readAt, Math.ceil(n * rate) + 4 + (readAt - base));
+    return raw.map(d => {
+      const out = new Float32Array(n), last = d.length - 1;
+      const at = s => d[Math.max(0, Math.min(last, s - readAt))] || 0;
+      for (let k = 0; k < n; k++) {
+        const x = pos + k * rate, i = Math.floor(x), t = x - i;
+        const y0 = at(i - 1), y1 = at(i), y2 = at(i + 1), y3 = at(i + 2);
+        const c1 = 0.5 * (y2 - y0), c2 = y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3, c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+        out[k] = ((c3 * t + c2) * t + c1) * t + y1;
+      }
+      return out;
+    });
+  }
+
+  // Playback speed for tape-style varispeed (1 = normal; pitch follows speed). Takes effect at
+  // once: a playing sound restarts from where it is, with the usual short fade.
+  setRate(rate) {
+    const r = Math.max(0.25, Math.min(4, Number(rate) || 1));
+    if (r === this.rate) return;
+    const f = this.feed, from = this.position();
+    this.rate = r;
+    if (this.playing && f) this.play({ from, region: f.region, loop: f.loop });
   }
 
   onWorklet(d) {
@@ -290,7 +335,8 @@ export class Engine {
     if (!this.playing || !this.source) return this.pos;
     const g = this.graph;
     const f = this.feed;
-    let p = this.pos + ((performance.now() - this.posAt) / 1000) * this.source.sr - (g ? g.latency : 0);
+    const rate = (f && f.rate) || 1; // source frames per output frame
+    let p = this.pos + (((performance.now() - this.posAt) / 1000) * this.source.sr - (g ? g.latency : 0)) * rate;
     if (f) {
       if (p < f.rs) p = f.loop ? f.re - (f.rs - p) : f.rs;
       if (p > f.re) p = f.re;

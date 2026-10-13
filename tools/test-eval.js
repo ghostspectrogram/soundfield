@@ -34,6 +34,13 @@
     check('Preferences survive a restart', sf.prefs.testMarker === CFG.marker, `testMarker = ${sf.prefs.testMarker}`);
     check('What’s new shows only once', document.querySelector('#modal').hidden, document.querySelector('#modal').hidden ? 'not shown' : 'shown again');
     check('Library loads from its index at startup', S.items.length === CFG.count, `${S.items.length} of ${CFG.count}`);
+    const tone = S.items.find(it => /Tone 1k/.test(it.rec.rel));
+    const kept = tone && await window.api.getLoudness(tone.path, tone.rec.size, tone.rec.mtime);
+    check('Loudness is remembered', kept && Math.abs(kept[0] + 23) < 0.15, kept ? `${kept[0]} LUFS` : 'not stored');
+    const pack = S.items.find(it => /Pack Hit\.wav$/.test(it.rec.rel));
+    const bg = pack && await window.api.getLoudness(pack.path, pack.rec.size, pack.rec.mtime);
+    check('Spectrogram level range is remembered', sf.prefs.specRange === 95 && sf.wave.specRange === 95 && document.querySelector('#spec-range-in').value === '95', `${sf.prefs.specRange} dB`);
+    check('Short sounds are measured in the background', !!bg, bg ? `Pack Hit: ${bg[0]} LUFS` : 'not measured');
     return { results, metrics };
   }
 
@@ -113,6 +120,49 @@
     const ok = src.idx.kind === f.chunked && src.idx.segs.length >= 3 && maxErr < (f.chunked === 'mp3' ? 1e-3 : 1e-6);
     check(`Piece-by-piece decoding: ${f.rel}`, ok, `${src.idx.segs.length} pieces, offset ${lag}, largest difference ${maxErr.toExponential(1)}`);
   }
+
+  // Loudness: a 1 kHz tone at −20 dBFS (mono) is −23.0 LUFS by definition.
+  const toneF = CFG.fixtures.find(x => x.lufs != null);
+  const ti = S.view.findIndex(it => it.rec && it.rec.rel === toneF.rel);
+  await sf.selectIndex(ti, { play: false });
+  await until(() => S.current && S.current.rec.rel === toneF.rel && S.loud && !S.loud.est, 10000);
+  check('Loudness measurement (LUFS)', S.loud && near(S.loud.lufs, toneF.lufs, 0.15) && near(S.loud.tp, -20, 0.2), S.loud ? `${S.loud.lufs} LUFS, ${S.loud.tp} dBTP` : 'not measured');
+  check('Loudness shows in the info panel', /LUFS/.test(document.querySelector('#file-meta').textContent));
+  sf.prefs.matchTarget = -20; sf.setMatch(true);
+  const g1 = sf.engine.trimDb;
+  sf.prefs.matchTarget = -14; sf.applySetting('matchTarget', -14);
+  const g2 = sf.engine.trimDb;
+  sf.setMatch(false);
+  check('Matched loudness gain', g1 === 3 && g2 === 9 && sf.engine.trimDb === 0, `+${g1} dB at −20, +${g2} dB at −14, ${sf.engine.trimDb} dB off`);
+  delete sf.prefs.matchTarget;
+
+  // Varispeed: +12 semitones plays twice as fast.
+  const longI = S.view.findIndex(it => it.rec && it.rec.rel === 'Long Room Tone.wav');
+  await sf.selectIndex(longI, { play: false });
+  sf.setVarispeed(12, true);
+  sf.engine.play({ from: 0 });
+  await wait(500);
+  const p0 = sf.engine.position(), t0 = performance.now();
+  await wait(1000);
+  const speed = (sf.engine.position() - p0) / ((performance.now() - t0) / 1000) / S.source.sr;
+  sf.engine.stop(); sf.setVarispeed(0, true);
+  check('Varispeed +12 st plays at double speed', speed > 1.8 && speed < 2.2 && sf.engine.rate === 1, `${speed.toFixed(2)}× speed`);
+
+  // Spectrogram: the 1 kHz tone at −20 dBFS shows as one bright line at 1 kHz.
+  await sf.selectIndex(ti, { play: false });
+  sf.setSpecView(true);
+  const specDone = await until(() => sf.wave.spec.overview && sf.wave.spec.overview.final, 10000);
+  const ov = sf.wave.spec.overview;
+  let best = 0, bestBin = 0;
+  if (ov) { const col = Math.floor(ov.cols / 2) * ov.bins; for (let k = 0; k < ov.bins; k++) if (ov.data[0][col + k] > best) { best = ov.data[0][col + k]; bestBin = k; } }
+  const hz = bestBin * (ov ? ov.sr / ov.N : 0), lineDb = best * 160 / 255 - 160;
+  check('Spectrogram shows a tone at its frequency and level', specDone && near(hz, 1000, 30) && near(lineDb, -20, 2), ov ? `${Math.round(hz)} Hz at ${lineDb.toFixed(1)} dB, ${ov.cols} columns` : 'not computed');
+  sf.wave.setView(S.source.frames * 0.5, S.source.frames * 0.5 + 4800);
+  const detail = await until(() => sf.wave.spec.detail && sf.wave.spec.detail.final, 5000);
+  check('Spectrogram computes detail when zoomed in', detail && sf.wave.spec.detail.end - sf.wave.spec.detail.start < S.source.frames, detail ? `${sf.wave.spec.detail.cols} columns over ${Math.round(sf.wave.spec.detail.end - sf.wave.spec.detail.start)} frames` : 'none');
+  sf.wave.setView(0, S.source.frames);
+  sf.setSpecView(false);
+  check('Waveform view returns', !sf.wave.specOn && document.querySelector('#db-head').textContent === 'dB');
 
   // Quick switching while playing must not stop playback or report errors
   const errs = [];
@@ -253,6 +303,9 @@
   const report = await window.api.problemReport();
   check('Problem report', report.startsWith(`Soundfield ${CFG.version}`), report.split('\n')[0]);
 
+  // The level-range slider stays where it's left, across restarts
+  const rangeIn = document.querySelector('#spec-range-in');
+  rangeIn.value = '95'; rangeIn.dispatchEvent(new Event('input'));
   // A preference to look for after the restart
   sf.prefs.testMarker = CFG.marker;
   sf.savePrefs();

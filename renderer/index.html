@@ -222,12 +222,19 @@
         <svg viewBox="0 0 24 24"><path d="M17 2l3 3-3 3M4 11V9a4 4 0 014-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 01-4 4H4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <button id="btn-auto" class="tbtn toggle" title="Auto-play when moving through the list with the ↑ / ↓ keys (A). Clicking never auto-plays; double-click to play.">AUTO</button>
+      <button id="btn-match" class="tbtn toggle" title="Matched loudness (M): every sound plays at the same perceived loudness while you audition. Your files aren't changed.">MATCH</button>
       <div id="time"><span id="t-pos">0:00.000</span><span class="sep">/</span><span id="t-dur">0:00.000</span></div>
 
       <div class="vol" title="Preview level: set it before you hit play. Double-click resets to 0 dB. Keys: - / =">
         <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor"/><path id="vol-waves" d="M16 8.5a5 5 0 010 7M18.5 6a8.5 8.5 0 010 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         <input id="volume" type="range" min="-60" max="12" step="0.5" value="0">
         <span id="vol-db">0.0 dB</span>
+      </div>
+
+      <div class="vol vari" id="vari" title="Varispeed, tape-style: speed and pitch change together. [ / ] = down / up a semitone, double-click resets. Dragged files keep their original speed.">
+        <span class="vari-l">Speed</span>
+        <input id="varispeed" type="range" min="-12" max="12" step="0.5" value="0" aria-label="Varispeed in semitones">
+        <span id="vari-val"><span>0 st</span><span class="vari-pct"></span></span>
       </div>
 
       <div class="spacer"></div>
@@ -241,6 +248,10 @@
         </select>
       </label>
       <button id="btn-lfe" class="tbtn toggle small" title="Include LFE in stereo / binaural monitoring">LFE</button>
+      <button id="btn-spec" class="tbtn toggle small" title="Spectrogram (V): show frequencies over time instead of the waveform">SPECTRO</button>
+      <label class="spec-range" id="spec-range" hidden title="Spectrogram level range: how many dB below the loudest level still show colour. Remembered.">
+        <span>Range</span><input id="spec-range-in" type="range" min="60" max="160" step="5" value="130"><b id="spec-range-val">130 dB</b>
+      </label>
       <label class="sel-wrap" title="Channel layout of this file">
         <span>Layout</span>
         <select id="layout-sel"></select>

@@ -43,13 +43,13 @@ class PcmSource {
     return data;
   }
 
-  // Peaks are computed off-thread in the main process.
-  async peaks(jobId, onProgress) {
+  // Peaks are computed off-thread in the main process. opts.loud = { sr, weights } also measures loudness.
+  async peaks(jobId, onProgress, opts) {
     const bucket = bucketFor(this.frames);
     const fmt = { ...this.fmt, frames: this.frames, dataOffset: this.info.dataOffset, size: this.info.size, mtime: this.info.mtime };
     const off = window.api.on('peaks:progress', m => { if (m.jobId === jobId) onProgress(m.peaks); });
     try {
-      return await window.api.peaks({ jobId, path: this.path, fmt, bucket });
+      return await window.api.peaks({ jobId, path: this.path, fmt, bucket, loud: (opts && opts.loud) || null });
     } finally {
       off();
     }
@@ -86,8 +86,8 @@ class DecodedSource {
     return this.data.map(a => a.slice(start, start + n));
   }
 
-  async peaks() {
-    const pb = new PeakBuilder(this.ch, this.frames, bucketFor(this.frames));
+  async peaks(jobId, onProgress, opts) {
+    const pb = new PeakBuilder(this.ch, this.frames, bucketFor(this.frames), opts && opts.loud);
     pb.push(this.data, this.frames);
     return pb.result();
   }

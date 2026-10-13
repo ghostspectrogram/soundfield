@@ -14,6 +14,13 @@ export function fmtDb(v) {
   return '−' + (-d).toFixed(1);
 }
 
+// Spectrogram colours: positions 0…1 → colour (Audition-like, from the Ghost session), or grey.
+const PALETTES = {
+  audition: [[0, 0x000000], [0.12, 0x14082f], [0.32, 0x3b1475], [0.5, 0x8e1a8e], [0.64, 0xd8245f], [0.78, 0xff7400], [0.9, 0xffd000], [1, 0xffffff]],
+  grey: [[0, 0x000000], [1, 0xffffff]],
+};
+const SPEC_LEVEL_DB = u8 => u8 * 160 / 255 - 160; // stored levels: one byte over −160 … 0 dB
+
 const NICE_STEPS = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
 
 export function fmtTime(sec, precise = false) {
@@ -49,6 +56,14 @@ export class WaveView {
     this.levels = null;
     this.setDbFloor(DEFAULT_FLOOR);
     this.peakWarn = Math.pow(10, -1 / 20); // a peak readout turns red at −1 dBFS or louder
+    // Spectrogram view
+    this.specOn = false;
+    this.spec = { overview: null, detail: null };
+    this.specRange = 130;
+    this.specScale = 'log';
+    this.specPalette = 'audition';
+    this.lut = null;
+    this.rowCache = null;
     new ResizeObserver(() => this.resize()).observe(this.wrap);
     this.bind();
   }
@@ -69,12 +84,14 @@ export class WaveView {
     this.mute = [];
     this.solo = [];
     this.levels = null;
+    this.spec = { overview: null, detail: null };
     this.buildLabels();
     this.updateSel();
     this.draw();
   }
 
   clear(message = '') {
+    this.spec = { overview: null, detail: null };
     this.frames = 0;
     this.levels = null;
     this.layout = null;
@@ -183,6 +200,7 @@ export class WaveView {
     this.v1 = v0 + span;
     this.updateSel();
     this.draw();
+    this.cb.view && this.cb.view(this.v0, this.v1);
   }
 
   zoomAt(x, factor) {
@@ -235,6 +253,8 @@ export class WaveView {
     const laneH = H / n;
     const spp = (this.v1 - this.v0) / W; // frames per device pixel
     const anySolo = this.solo.some(Boolean);
+
+    if (this.specOn) { this.paintSpectro(c, W, H, n, laneH, spp, anySolo, dpr); return; }
 
     let useRaw = false;
     const viewFrames = this.v1 - this.v0;
@@ -484,6 +504,7 @@ export class WaveView {
     c.clearRect(0, 0, W, H);
     if (!this.layout || !this.frames) return;
     const n = this.layout.ch, laneH = H / n;
+    if (this.specOn) { this.paintFreqScale(c, W, laneH, n, dpr); return; }
     c.font = `${9.5 * dpr}px ui-monospace, Consolas, monospace`;
     c.textAlign = 'right';
     c.textBaseline = 'middle';
@@ -531,6 +552,117 @@ export class WaveView {
       if (off > laneH / 2 - 1 * dpr) continue;
       c.fillRect(0, Math.round(mid - off), W, 1);
       c.fillRect(0, Math.round(mid + off), W, 1);
+    }
+  }
+
+  // ---------------------------------------------------------------- spectrogram
+  setSpecView(on) { this.specOn = !!on; this.draw(); }
+  setSpecRange(db) { this.specRange = Math.max(60, Math.min(160, Number(db) || 130)); this.lut = null; this.draw(); }
+  setSpecScale(s) { this.specScale = s === 'linear' ? 'linear' : 'log'; this.rowCache = null; this.draw(); }
+  setSpecPalette(p) { this.specPalette = PALETTES[p] ? p : 'audition'; this.lut = null; this.draw(); }
+  // kind: 'overview' | 'detail'; s: { start, end, cols, bins, N, sr, data: [Uint8Array per channel] } or null.
+  setSpectro(kind, s) { this.spec[kind] = s; this.draw(); }
+
+  // Colour for each stored level (one byte), for the current range and palette.
+  specLut() {
+    if (this.lut) return this.lut;
+    const stops = PALETTES[this.specPalette] || PALETTES.audition;
+    const lut = new Uint32Array(256);
+    for (let u = 0; u < 256; u++) {
+      const t = Math.max(0, Math.min(1, 1 + SPEC_LEVEL_DB(u) / this.specRange));
+      let k = 1;
+      while (k < stops.length - 1 && stops[k][0] < t) k++;
+      const [p0, c0] = stops[k - 1], [p1, c1] = stops[k];
+      const f = p1 > p0 ? (t - p0) / (p1 - p0) : 0;
+      const ch = sh => Math.round(((c0 >> sh) & 255) * (1 - f) + ((c1 >> sh) & 255) * f);
+      lut[u] = (255 << 24) | (ch(0) << 16) | (ch(8) << 8) | ch(16); // ImageData is RGBA in memory (little-endian ABGR)
+    }
+    return (this.lut = lut);
+  }
+
+  // For each pixel row of a lane (top = highest frequency): the FFT bins it covers.
+  specRows(h, sr, N) {
+    const key = `${h}|${sr}|${N}|${this.specScale}`;
+    if (this.rowCache && this.rowCache.key === key) return this.rowCache;
+    const nyq = sr / 2, binHz = sr / N, bins = N / 2 + 1, lo = new Uint16Array(h), hi = new Uint16Array(h);
+    const fAt = y => (this.specScale === 'linear' ? nyq * (1 - y / h) : 20 * Math.pow(nyq / 20, 1 - y / h));
+    for (let y = 0; y < h; y++) {
+      const fTop = fAt(y), fBot = fAt(y + 1);
+      let a = Math.round(fBot / binHz), b = Math.round(fTop / binHz);
+      a = Math.max(0, Math.min(bins - 1, a)); b = Math.max(a, Math.min(bins - 1, b));
+      lo[y] = a; hi[y] = b;
+    }
+    return (this.rowCache = { key, lo, hi, fAt });
+  }
+
+  paintSpectro(c, W, H, n, laneH, spp, anySolo, dpr) {
+    // The detail picture when it covers the view, otherwise the overview.
+    const d = this.spec.detail, o = this.spec.overview;
+    const s = d && d.start <= this.v0 && d.end >= this.v1 ? d : o;
+    if (!s) {
+      c.fillStyle = 'rgba(255,255,255,0.4)';
+      c.font = `${12 * dpr}px system-ui, sans-serif`;
+      c.textAlign = 'center';
+      c.fillText('Building the spectrogram…', W / 2, H / 2);
+      return;
+    }
+    const lut = this.specLut();
+    const colSpan = (s.end - s.start) / s.cols;
+    const bins = s.bins;
+    const merged = new Uint8Array(bins);
+    for (let ch = 0; ch < n; ch++) {
+      const y0 = Math.round(ch * laneH), h = Math.max(1, Math.round((ch + 1) * laneH) - y0);
+      const rows = this.specRows(h, s.sr, s.N);
+      const img = c.createImageData(W, h);
+      const px = new Uint32Array(img.data.buffer);
+      const data = s.data[ch] || s.data[0];
+      for (let x = 0; x < W; x++) {
+        const f0 = this.v0 + x * spp, f1 = f0 + spp;
+        if (f1 <= s.start || f0 >= s.end) continue;
+        // Loudest level per bin across the columns under this pixel (max-pooling keeps clicks).
+        const ca = Math.max(0, Math.min(s.cols - 1, Math.floor((f0 - s.start) / colSpan)));
+        const cb = Math.max(ca, Math.min(s.cols - 1, Math.ceil((f1 - s.start) / colSpan) - 1));
+        if (ca === cb) merged.set(data.subarray(ca * bins, ca * bins + bins));
+        else {
+          merged.fill(0);
+          for (let col = ca; col <= cb; col++) { const b0 = col * bins; for (let k = 0; k < bins; k++) { const v = data[b0 + k]; if (v > merged[k]) merged[k] = v; } }
+        }
+        for (let y = 0; y < h; y++) {
+          let m = 0;
+          for (let k = rows.lo[y]; k <= rows.hi[y]; k++) if (merged[k] > m) m = merged[k];
+          px[y * W + x] = lut[m];
+        }
+      }
+      c.putImageData(img, 0, y0);
+      if (this.mute[ch] || (anySolo && !this.solo[ch])) { c.fillStyle = 'rgba(13,15,19,0.65)'; c.fillRect(0, y0, W, h); }
+      if (ch > 0) { c.fillStyle = 'rgba(255,255,255,0.25)'; c.fillRect(0, y0, W, 1); }
+    }
+  }
+
+  // Frequency labels beside a spectrogram lane.
+  paintFreqScale(c, W, laneH, n, dpr) {
+    const s = this.spec.detail || this.spec.overview;
+    const sr = (s && s.sr) || this.sr, nyq = sr / 2;
+    const marks = this.specScale === 'linear'
+      ? Array.from({ length: Math.floor(nyq / 2000) }, (_, i) => (i + 1) * 2000)
+      : [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000].filter(f => f < nyq);
+    const yOf = (f, h) => (this.specScale === 'linear' ? h * (1 - f / nyq) : h * (1 - Math.log(f / 20) / Math.log(nyq / 20)));
+    c.font = `${9.5 * dpr}px ui-monospace, Consolas, monospace`;
+    c.textAlign = 'right';
+    c.textBaseline = 'middle';
+    for (let ch = 0; ch < n; ch++) {
+      const y0 = ch * laneH;
+      if (ch > 0) { c.fillStyle = 'rgba(255,255,255,0.06)'; c.fillRect(0, Math.round(y0), W, 1); }
+      let lastY = -1e9;
+      for (const f of marks) {
+        const y = y0 + yOf(f, laneH);
+        if (y < y0 + 6 * dpr || y > y0 + laneH - 4 * dpr || Math.abs(y - lastY) < 12 * dpr) continue;
+        lastY = y;
+        c.fillStyle = 'rgba(255,255,255,0.35)';
+        c.fillRect(W - 4 * dpr, Math.round(y), 4 * dpr, 1);
+        c.fillStyle = 'rgba(255,255,255,0.6)';
+        c.fillText(f >= 1000 ? `${f / 1000}k` : String(f), W - 6 * dpr, y);
+      }
     }
   }
 

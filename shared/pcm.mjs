@@ -5,6 +5,8 @@
 // their container (e.g. 24-in-32) are left-justified, so they decode correctly
 // as the container width.
 
+import { LoudnessMeter } from './loudness.mjs';
+
 export function decodePcm(u8, fmt, frames) {
   const ch = fmt.ch;
   const bytes = fmt.blockAlign / ch;
@@ -99,8 +101,10 @@ export function bucketFor(frames) {
 }
 
 // Incremental min / max / rms builder. data[c] is Float32Array(nb * 3).
+// opts.sr (+ opts.weights per channel) also measures loudness in the same pass: result().loudness.
 export class PeakBuilder {
-  constructor(ch, totalFrames, bucket) {
+  constructor(ch, totalFrames, bucket, opts) {
+    this.loud = opts && opts.sr ? new LoudnessMeter(opts.sr, ch, opts.weights) : null;
     this.ch = ch;
     this.frames = totalFrames;
     this.bucket = bucket;
@@ -139,6 +143,7 @@ export class PeakBuilder {
     }
     this.pos += n;
     this.finalize(Math.floor(this.pos / B));
+    if (this.loud) this.loud.push(planar, n);
   }
 
   finalize(upTo) {
@@ -153,7 +158,9 @@ export class PeakBuilder {
 
   result() {
     this.finalize(this.nb);
-    return { bucket: this.bucket, nb: this.nb, ch: this.ch, frames: this.frames, done: this.nb, data: this.data };
+    const r = { bucket: this.bucket, nb: this.nb, ch: this.ch, frames: this.frames, done: this.nb, data: this.data };
+    if (this.loud) r.loudness = this.loud.result();
+    return r;
   }
 
   snapshot() {

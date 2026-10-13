@@ -1,7 +1,7 @@
 {
   "name": "soundfield",
   "productName": "Soundfield",
-  "version": "0.2.0-beta.4",
+  "version": "0.2.0-beta.5",
   "description": "Fast sound effects library explorer built for surround and immersive audio.",
   "main": "main.js",
   "private": true,
@@ -16,6 +16,8 @@
     "./region": "./lib/region.js",
     "./pcm": "./shared/pcm.mjs",
     "./categorize": "./shared/categorize.mjs",
+    "./loudness": "./shared/loudness.mjs",
+    "./spectro": "./shared/spectro.mjs",
     "./layouts": "./renderer/js/layouts.js",
     "./engine": "./renderer/js/engine.js",
     "./sources": "./renderer/js/sources.js",

@@ -275,7 +275,13 @@ function pumpAnalysis() {
   // Forget files that are gone.
   const live = new Set(records.map(r => r.rel));
   for (const rel of Object.keys(cache)) if (!live.has(rel)) delete cache[rel];
-  const w = new Worker(path.join(__dirname, 'lib', 'analyze-worker.mjs'), { workerData: { root: lib.path, records, cache } });
+  // Short PCM sounds (up to a minute) whose loudness isn't known yet are measured too.
+  const base = lib.path.endsWith(path.sep) ? lib.path : lib.path + path.sep;
+  const full = r => base + r.rel.split('/').join(path.sep);
+  const byRel = new Map(records.map(r => [r.rel, r]));
+  const lm = loudStore();
+  const loudTodo = records.filter(r => !r.zip && (r.codec === 'pcm' || r.codec === 'float') && r.dur <= 60 && !lm[loudKey(full(r), r.size, r.mtime)]).map(r => r.rel);
+  const w = new Worker(path.join(__dirname, 'lib', 'analyze-worker.mjs'), { workerData: { root: lib.path, records, cache, loudTodo, busy: busyFlag.buffer } });
   analyzing = { id, w };
   // The cache can be several MB, so it's written every 15 s while listening (and at the end), not per batch.
   let savedAt = Date.now();
@@ -283,6 +289,7 @@ function pumpAnalysis() {
     if (m.type === 'results') {
       const map = {};
       for (const [rel, v] of Object.entries(m.results)) { cache[rel] = v; if (v[2]) map[rel] = v[2]; }
+      for (const [rel, v] of Object.entries(m.loudness || {})) { const r = byRel.get(rel); if (r) setLoudness(full(r), r.size, r.mtime, v); }
       if (Object.keys(m.results).length && Date.now() - savedAt > 15000) { store.saveAnalysis(id, cache); savedAt = Date.now(); }
       send('analysis:update', { id, map, done: m.done, total: m.total });
     } else if (m.type === 'error') console.error('analysis error', m.message);
@@ -295,6 +302,30 @@ function pumpAnalysis() {
     pumpAnalysis();
   });
 }
+
+// ------------------------------------------------------------------ loudness
+// Integrated loudness (LUFS) and true peak per file, measured while a waveform is built or in
+// the background for short sounds. Keyed by path + size + modified time, so an edited file is
+// measured again. Saved at most every 10 s.
+let loudMap = null, loudTimer = null;
+const loudKey = (p, size, mtime) => `${p}|${size}|${mtime}`;
+function loudStore() { if (!loudMap) loudMap = store.loudness(); return loudMap; }
+function setLoudness(p, size, mtime, v) {
+  if (!v || v.lufs == null) return;
+  const m = loudStore();
+  m[loudKey(p, size, mtime)] = [v.lufs, v.tp];
+  if (!loudTimer) loudTimer = setTimeout(flushLoudness, 10000);
+}
+function flushLoudness() {
+  clearTimeout(loudTimer);
+  loudTimer = null;
+  if (!loudMap) return;
+  const keys = Object.keys(loudMap);
+  if (keys.length > 150000) for (const k of keys.slice(0, keys.length - 150000)) delete loudMap[k]; // keep the newest
+  store.saveLoudness(loudMap);
+}
+// Paused while something plays: background measuring reads files from disk.
+const busyFlag = new Int32Array(new SharedArrayBuffer(4));
 
 // ------------------------------------------------------------------ peaks
 const peaksCancel = new Int32Array(new SharedArrayBuffer(4));
@@ -311,6 +342,7 @@ function getPeaksWorker() {
     if (m.type === 'progress') { job.sender.send('peaks:progress', { jobId: m.jobId, peaks: m.peaks }); return; }
     peakJobs.delete(m.jobId);
     if (m.type === 'done') {
+      if (m.peaks.loudness && job.file) setLoudness(job.file.path, job.file.size, job.file.mtime, m.peaks.loudness);
       peakCache.set(job.key, m.peaks);
       while (peakCache.size > 48) peakCache.delete(peakCache.keys().next().value);
       job.resolve(m.peaks);
@@ -701,15 +733,15 @@ function registerIpc() {
   ipcMain.handle('file:readAll', (e, p) => fsp.readFile(p));
 
   ipcMain.handle('file:peaks', (e, req) => {
-    const { jobId, path: p, fmt, bucket } = req;
+    const { jobId, path: p, fmt, bucket, loud } = req;
     Atomics.store(peaksCancel, 0, jobId);
-    const key = `${p}|${fmt.size}|${fmt.mtime}|${bucket}`;
+    const key = `${p}|${fmt.size}|${fmt.mtime}|${bucket}|${loud ? 'L' : ''}`;
     const hit = peakCache.get(key);
     if (hit) { peakCache.delete(key); peakCache.set(key, hit); return hit; }
     for (const [id, j] of peakJobs) if (id !== jobId) { j.resolve(null); peakJobs.delete(id); }
     return new Promise(resolve => {
-      peakJobs.set(jobId, { resolve, key, sender: e.sender });
-      getPeaksWorker().postMessage({ jobId, path: p, fmt, bucket });
+      peakJobs.set(jobId, { resolve, key, sender: e.sender, file: { path: p, size: fmt.size, mtime: fmt.mtime } });
+      getPeaksWorker().postMessage({ jobId, path: p, fmt, bucket, loud: loud || null });
     });
   });
 
@@ -909,6 +941,9 @@ function registerIpc() {
       ...lines.slice(-150),
     ].join('\r\n');
   });
+  ipcMain.handle('loud:get', (e, p, size, mtime) => loudStore()[loudKey(p, size, mtime)] || null);
+  ipcMain.on('loud:set', (e, p, size, mtime, v) => { if (typeof p === 'string') setLoudness(p, size, mtime, v); });
+  ipcMain.on('app:busy', (e, on) => Atomics.store(busyFlag, 0, on ? 1 : 0));
   ipcMain.handle('regions:info', () => { const f = regionFiles(); return { dir: regionDir(), count: f.length, bytes: f.reduce((t, x) => t + x.size, 0) }; });
   ipcMain.handle('regions:open', () => { fs.mkdirSync(regionDir(), { recursive: true }); return shell.openPath(regionDir()); });
   ipcMain.handle('cache:previewSize', () => {
@@ -1307,4 +1342,4 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
-app.on('will-quit', flushSettings);
+app.on('will-quit', () => { flushSettings(); if (loudTimer) flushLoudness(); });

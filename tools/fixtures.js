@@ -114,6 +114,7 @@ const FIXTURES = [
   { rel: 'Explosions/Explosion Big 5.1.wav', make: () => wav(tone(48000, 2, [0.8, 0.8, 0.5, 0.1, 0.4, 0.4]), 48000, 24, { mask: 0x3f }), expect: { ch: 6, cls: 'surround', peaks: [0.8, 0.8, 0.5, 0.1, 0.4, 0.4] } },
   { rel: 'Ambisonic/Forest AmbiX FOA.wav', make: () => wav(tone(48000, 2, [0.5, 0.3, 0.3, 0.3]), 48000, 24), expect: { ch: 4, cls: 'ambi' } },
   { rel: 'UI/Click Tick.aif', make: () => aiff(tone(44100, 0.5, [0.25]), 44100), expect: { ch: 1, cls: 'mono', sr: 44100, peaks: [0.25] } },
+  { rel: 'Tones/Tone 1k -20dB.wav', make: () => wav(tone(48000, 5, [0.1], 1000), 48000, 24), expect: { ch: 1, cls: 'mono', peaks: [0.1] }, lufs: -23.0 },
   { rel: 'Long Room Tone.wav', make: () => wav(tone(48000, 90, [0.1], 120), 48000, 16), expect: { ch: 1, cls: 'mono', peaks: [0.1] } },
   // Compressed files: the tests lower the length limit so these are decoded a piece at a time.
   { rel: 'Ambience/Forest Bed.flac', make: () => flac(tone(44100, 20, [0.4, 0.2], 330), 44100), expect: { ch: 2, cls: 'stereo', sr: 44100, peaks: [0.4, 0.2] }, chunked: 'flac' },
@@ -131,7 +132,7 @@ function makeFixtures(root) {
   const z = path.join(root, 'Packs', 'Small Pack.zip');
   fs.mkdirSync(path.dirname(z), { recursive: true });
   writeZip(z, [{ name: 'Pack Hit.wav', data: wav(tone(48000, 0.3, [0.5]), 48000, 16) }]);
-  return { count: FIXTURES.length + 1, fixtures: FIXTURES.map(f => ({ rel: f.rel, expect: f.expect, chunked: f.chunked || '' })) };
+  return { count: FIXTURES.length + 1, fixtures: FIXTURES.map(f => ({ rel: f.rel, expect: f.expect, chunked: f.chunked || '', lufs: f.lufs ?? null })) };
 }
 
 module.exports = { makeFixtures };

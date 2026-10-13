@@ -4,11 +4,13 @@ import { SpeakerView } from './speakers.js';
 import { VList } from './vlist.js';
 import { createOnline } from './online.js';
 import { createSettings } from './settings.js';
+import { SpectroFeeder } from './spectro.js';
 import { createSource } from './sources.js';
 import { detectLayout, layoutChoices } from './layouts.js';
 import { metaCategory, TYPES, TYPE_LABELS } from '../../shared/categorize.mjs';
 import { RELEASES, unseenReleases } from './whats-new.js';
 import SAFETY_DEFAULTS from '../../shared/safety.json' with { type: 'json' };
+import { loudnessWeights } from '../../shared/loudness.mjs';
 
 const $ = s => document.querySelector(s);
 const api = window.api;
@@ -77,7 +79,7 @@ const wave = new WaveView({
   wrap: $('#wave-wrap'), canvas: $('#wave'), ruler: $('#ruler'), sel: $('#sel'),
   playhead: $('#playhead'), hover: $('#hover'), labels: $('#lanes-labels'), dbscale: $('#dbscale'),
 });
-wave.on('levels', () => renderMeta());
+wave.on('levels', () => { estimateLoudness(); renderMeta(); });
 const speakers = new SpeakerView($('#speakers'));
 const list = new VList($('#list'), { rowHeight: 26, render: renderRow, isSelected: i => (S.multi.size ? !!S.view[i] && S.multi.has(S.view[i].path) : i === list.selected) });
 $('#list').tabIndex = 0;
@@ -496,6 +498,8 @@ async function loadItem(it, { play = false } = {}) {
   S.current = it;
   const token = ++S.token;
   engine.stop();
+  S.loud = null;
+  applyMatch(); // back to 0 dB until this sound's loudness is known
   S.selection = null;
   S.cursor = 0;
   S.source = null;
@@ -547,12 +551,116 @@ async function loadItem(it, { play = false } = {}) {
     renderMeta();
   }
   engine.setSource(source, layout);
+  startSpectro();
+  // Loudness measured earlier (or in the background) is known before the first note plays.
+  const known = await api.getLoudness(it.path, info.size, info.mtime).catch(() => null);
+  if (token !== S.token) return;
+  if (known) { S.loud = { lufs: known[0], tp: known[1], est: false }; applyMatch(); }
   if (play || S.playOnLoad === it) { S.playOnLoad = null; startPlay(); }
 
+  // The waveform pass also measures loudness, except for very long files (they get an estimate).
+  const secs = source.frames / source.sr;
+  const loud = secs <= 1200 ? { sr: source.sr, weights: loudnessWeights(layout, source.ch) } : null;
   const job = ++S.peakJob;
-  const peaks = await source.peaks(job, p => { if (token === S.token) wave.setPeaks(p); }).catch(() => null);
-  if (token === S.token && peaks) wave.setPeaks(peaks);
+  const peaks = await source.peaks(job, p => { if (token === S.token) wave.setPeaks(p); }, { loud }).catch(() => null);
+  if (token === S.token && peaks) {
+    if (peaks.loudness && peaks.loudness.lufs != null) {
+      S.loud = { lufs: peaks.loudness.lufs, tp: peaks.loudness.tp, est: false };
+      if (!source.streaming) api.saveLoudness(it.path, info.size, info.mtime, peaks.loudness); // PCM files are saved by the main process
+      applyMatch();
+    }
+    wave.setPeaks(peaks);
+    renderMeta();
+  }
 }
+
+// ------------------------------------------------------------------ spectrogram
+// SPECTRO (key V) shows frequencies over time instead of the waveform. An overview of the whole
+// sound is computed when the view is on; zooming in past it computes the visible part in detail.
+// Each runs in its own background worker, so one never cancels the other.
+const onSpectro = r => {
+  if (r.source !== S.source) return; // from a sound that's no longer open
+  wave.setSpectro(r.kind, { start: r.start, end: r.end, cols: r.cols, bins: r.bins, N: r.N, sr: r.sr, data: r.data, final: r.final });
+};
+const specOverview = new SpectroFeeder(onSpectro), specDetail = new SpectroFeeder(onSpectro);
+const specN = () => [1024, 2048, 4096].includes(prefs.specFFT) ? prefs.specFFT : 2048;
+
+function startSpectro() {
+  wave.setSpectro('overview', null);
+  wave.setSpectro('detail', null);
+  specDetail.cancel();
+  if (!prefs.specView || !S.source || !S.layout) { specOverview.cancel(); return; }
+  specOverview.compute(S.source, 'overview', { cols: 2048, perCol: 4, N: specN() }).catch(err => console.warn('spectrogram', err));
+}
+
+let specTimer = 0;
+wave.on('view', () => { if (prefs.specView) { clearTimeout(specTimer); specTimer = setTimeout(specZoomed, 160); } });
+function specZoomed() {
+  const ov = wave.spec.overview, src = S.source;
+  if (!ov || !src) return;
+  const span = wave.v1 - wave.v0, W = $('#wave').width;
+  if (span / ((ov.end - ov.start) / ov.cols) >= W * 0.5) { specDetail.cancel(); wave.setSpectro('detail', null); return; } // the overview is sharp enough
+  const d = wave.spec.detail;
+  if (d && d.start <= wave.v0 && d.end >= wave.v1 && (d.end - d.start) / d.cols <= (span / W) * 1.5) return; // detail still covers it
+  if (span * src.ch > 1.2e7) return; // too much audio to read for a detail view
+  const a = Math.max(0, wave.v0 - span * 0.25), b = Math.min(src.frames, wave.v1 + span * 0.25);
+  specDetail.compute(src, 'detail', { start: a, end: b, cols: Math.ceil(W * 1.5 * (b - a) / span), perCol: 2, N: specN() }).catch(() => {});
+}
+
+function setSpecView(on) {
+  prefs.specView = !!on;
+  savePrefs();
+  setToggle('#btn-spec', prefs.specView);
+  $('#spec-range').hidden = !prefs.specView;
+  $('#db-head').textContent = prefs.specView ? 'Hz' : 'dB';
+  wave.setSpecView(prefs.specView);
+  if (prefs.specView) { if (!wave.spec.overview) startSpectro(); } else { specOverview.cancel(); specDetail.cancel(); }
+}
+function setSpecRange(db, save = true) {
+  db = Math.max(60, Math.min(160, Math.round(Number(db) / 5) * 5 || 130));
+  prefs.specRange = db;
+  $('#spec-range-in').value = db;
+  $('#spec-range-in').style.setProperty('--fill', `${((db - 60) / 100) * 100}%`);
+  $('#spec-range-val').textContent = `${db} dB`;
+  wave.setSpecRange(db);
+  if (save) savePrefs();
+}
+$('#btn-spec').addEventListener('click', () => setSpecView(!prefs.specView));
+$('#spec-range-in').addEventListener('input', e => setSpecRange(e.target.value));
+$('#spec-range-in').addEventListener('dblclick', () => setSpecRange(130));
+
+// ------------------------------------------------------------------ matched loudness
+// With MATCH on, each sound plays at the same perceived loudness (the target in Settings), never
+// boosted so far that its true peak passes −1 dBTP. Playback only: files are never changed.
+function matchGain(l) {
+  if (!l || l.lufs == null) return 0;
+  let g = (prefs.matchTarget ?? -20) - l.lufs;
+  g = Math.max(-30, Math.min(18, g));
+  if (l.tp != null) g = Math.min(g, -1 - l.tp);
+  return Math.round(g * 10) / 10;
+}
+function applyMatch() {
+  S.matchDb = prefs.matchLoudness ? matchGain(S.loud) : 0;
+  engine.setTrim(S.matchDb);
+}
+// Before the measurement is in (or for very long files): an estimate from the waveform's levels.
+function estimateLoudness() {
+  const lv = wave.levels;
+  if (!lv || S.loud) return;
+  const w = loudnessWeights(S.layout, lv.ch.length);
+  const z = lv.ch.reduce((t, c, i) => t + (w[i] ?? 1) * c.rms * c.rms, 0);
+  if (z <= 0) return;
+  S.loud = { lufs: Math.round((-0.691 + 10 * Math.log10(z)) * 10) / 10, tp: lv.peak > 0 ? 20 * Math.log10(lv.peak) : null, est: true };
+  applyMatch();
+}
+function setMatch(on) {
+  prefs.matchLoudness = !!on;
+  setToggle('#btn-match', prefs.matchLoudness);
+  savePrefs();
+  applyMatch();
+  renderMeta();
+}
+$('#btn-match').addEventListener('click', () => setMatch(!prefs.matchLoudness));
 
 function setWaveFile(source, layout) {
   wave.setFile({ frames: source.frames, sr: source.sr, layout });
@@ -605,6 +713,7 @@ function togglePlay() {
 }
 
 engine.on('state', s => {
+  api.setBusy(s.playing); // background measuring pauses while something plays
   $('#player').classList.toggle('playing', s.playing);
   updateMonitorHint();
   if (s.ended && !S.selection) S.cursor = 0;
@@ -675,6 +784,11 @@ function renderMeta() {
     if (wave.levels) {
       rows.push(['Peak', `${fmtDb(wave.levels.peak)} dBFS`]);
       rows.push(['RMS', `${fmtDb(wave.levels.rms)} dBFS`]);
+    }
+    if (S.loud && S.loud.lufs != null) {
+      rows.push(['Loudness', `${S.loud.lufs.toFixed(1)} LUFS${S.loud.est ? ' (estimate)' : ''}`]);
+      if (!S.loud.est && S.loud.tp != null) rows.push(['True peak', `${S.loud.tp > 0 ? '+' : ''}${S.loud.tp.toFixed(1)} dBTP`]);
+      if (prefs.matchLoudness) rows.push(['Matched', `${S.matchDb > 0 ? '+' : ''}${(S.matchDb || 0).toFixed(1)} dB (target ${prefs.matchTarget ?? -20} LUFS)`]);
     }
     if (info && info.mask) rows.push(['Mask', '0x' + info.mask.toString(16).toUpperCase()]);
     if (L && L.chans.length && !L.ambi) rows.push(['Order', L.chans.map(c => c.role === c.label ? c.role : c.label).join(' ')]);
@@ -756,6 +870,34 @@ function setVolume(db, save = true) {
 vol.addEventListener('input', () => setVolume(Number(vol.value)));
 vol.addEventListener('dblclick', () => setVolume(0));
 vol.addEventListener('wheel', e => { e.preventDefault(); setVolume(prefs.volume + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
+
+// Varispeed (tape-style): semitones → speed. Not saved: every launch starts at normal speed.
+let variSt = 0, variTimer = 0, variAt = 0;
+function setVarispeed(st, now = false) {
+  st = Math.max(-12, Math.min(12, Math.round(st * 2) / 2));
+  variSt = st;
+  const rate = Math.pow(2, st / 12);
+  const el = $('#varispeed');
+  el.value = st;
+  el.style.setProperty('--fill', `${((st + 12) / 24) * 100}%`);
+  const vv = $('#vari-val');
+  vv.firstChild.textContent = st ? `${st > 0 ? '+' : '−'}${Math.abs(st).toFixed(1).replace(/\.0$/, '')} st` : '0 st';
+  vv.lastChild.textContent = st ? ` · ${Math.round(rate * 100)}%` : '';
+  $('#vari').classList.toggle('on', st !== 0);
+  // While dragging, the playing sound restarts at most every 90 ms.
+  clearTimeout(variTimer);
+  if (now || performance.now() - variAt > 90) { variAt = performance.now(); engine.setRate(rate); }
+  else variTimer = setTimeout(() => { variAt = performance.now(); engine.setRate(rate); }, 90);
+}
+$('#varispeed').addEventListener('input', e => setVarispeed(Number(e.target.value)));
+$('#varispeed').addEventListener('change', e => setVarispeed(Number(e.target.value), true));
+$('#varispeed').addEventListener('dblclick', () => setVarispeed(0, true));
+$('#vari').addEventListener('wheel', e => { e.preventDefault(); setVarispeed(variSt + (e.deltaY < 0 ? 0.5 : -0.5)); }, { passive: false });
+function applyVarispeedVisible() {
+  const show = prefs.showVarispeed !== false;
+  $('#vari').hidden = !show;
+  if (!show && variSt) setVarispeed(0, true); // hidden means normal speed
+}
 
 function setToggle(id, on) { $(id).classList.toggle('on', on); }
 $('#btn-play').addEventListener('click', togglePlay);
@@ -1777,7 +1919,7 @@ function renderScanStatus() {
   if (!first && !S.dupProgress && S.analyzing.size) {
     const [id, a] = [...S.analyzing][0];
     const lib = S.libs.find(l => l.id === id);
-    el.innerHTML = `Listening to sort ${lib ? escapeHtml(lib.name) : ''}: ${a.done.toLocaleString()} / ${a.total.toLocaleString()}<div class="bar"><i style="width:${a.total ? (a.done / a.total) * 100 : 0}%"></i></div>`;
+    el.innerHTML = `Listening to ${lib ? escapeHtml(lib.name) : ''} (categories, loudness): ${a.done.toLocaleString()} / ${a.total.toLocaleString()}<div class="bar"><i style="width:${a.total ? (a.done / a.total) * 100 : 0}%"></i></div>`;
     return;
   }
   if (!first && S.dupProgress) {
@@ -1870,6 +2012,9 @@ document.addEventListener('keydown', e => {
     if (p) addToProject(p, [S.current]); else newProject([S.current]);
   }
   else if (lk === 'z') wave.fit();
+  else if (lk === 'v') setSpecView(!prefs.specView);
+  else if (lk === 'm') { setMatch(!prefs.matchLoudness); toast(`Matched loudness ${prefs.matchLoudness ? 'on' : 'off'}`); }
+  else if ((k === '[' || k === ']') && prefs.showVarispeed !== false) setVarispeed(variSt + (k === ']' ? 1 : -1), true);
   else if (lk === 'b') { $('#monitor').value = prefs.monitor === 'binaural' ? 'stereo' : 'binaural'; $('#monitor').dispatchEvent(new Event('change')); toast(`Monitor: ${$('#monitor').selectedOptions[0].textContent}`); }
   else if (k === '-' || k === '_') setVolume(prefs.volume - 1);
   else if (k === '=' || k === '+') setVolume(prefs.volume + 1);
@@ -2547,6 +2692,13 @@ function applySetting(key, v) {
     case 'uiZoom': api.setZoom(v); break;
     case 'rowDensity': applyRowDensity(); break;
     case 'onlineSaveDir': onlineUI.setSaveDir(v || null, true); break;
+    case 'showVarispeed': applyVarispeedVisible(); break;
+    case 'matchLoudness': setToggle('#btn-match', !!v); applyMatch(); renderMeta(); break;
+    case 'matchTarget': applyMatch(); renderMeta(); break;
+    case 'specRange': setSpecRange(v, false); break;
+    case 'specScale': wave.setSpecScale(v); break;
+    case 'specPalette': wave.setSpecPalette(v); break;
+    case 'specFFT': startSpectro(); break;
     case 'outputDevice': engine.setSink(v).then(ok => { if (!ok) toast('That output device can’t be used right now; playing through the Windows default.', 5000); }); break;
   }
 }
@@ -2640,6 +2792,7 @@ async function boot() {
   setVolume(prefs.volume, false);
   setToggle('#btn-loop', prefs.loop);
   setToggle('#btn-auto', prefs.autoplay);
+  setToggle('#btn-match', !!prefs.matchLoudness);
   setToggle('#btn-folders', !!prefs.showFolders);
   setToggle('#btn-lfe', prefs.lfe);
   $('#monitor').value = prefs.monitor;
@@ -2676,9 +2829,15 @@ async function boot() {
   if (prefs.rowDensity && prefs.rowDensity !== 'normal') applyRowDensity();
   if (prefs.onlineSaveDir) onlineUI.setSaveDir(prefs.onlineSaveDir, true);
   applyOutputDevice();
+  applyVarispeedVisible();
+  setVarispeed(0, true);
+  wave.setSpecScale(prefs.specScale);
+  wave.setSpecPalette(prefs.specPalette);
+  setSpecRange(prefs.specRange ?? 130, false); // remembered where you left it
+  setSpecView(!!prefs.specView);
   window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, savePrefs, openFolder, goUp, folderChain, excludingFolder, extraCopies,
     addToProject, removeFromProject, relinkProject, openProject, projectById, exportProject, renderProjects, saveProjects, setMode, onlineUI, loadOnline,
-    findDupes, showAbout, settingsUI, applySetting, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
+    findDupes, showAbout, settingsUI, applySetting, setMatch, setVarispeed, setSpecView, setSpecRange, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
   showWhatsNew();
 }
 boot();

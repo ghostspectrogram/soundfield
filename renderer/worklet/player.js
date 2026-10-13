@@ -106,7 +106,7 @@ class SfxPlayer extends AudioWorkletProcessor {
       this.off += take;
       w += take;
       this.consumed += take;
-      this.pos = c.start + this.off;
+      this.pos = c.start + this.off * (c.rate || 1); // varispeed chunks: one output frame = `rate` source frames
       if (this.off >= c.frames) { this.queue.shift(); this.off = 0; }
     }
   }

@@ -50,6 +50,7 @@ The app icon lives in `build/icon.ico` / `build/icon.png`. It's drawn by `tools/
 | `renderer/js/sources.js`, `renderer/js/chunked.js` | Audio sources: PCM streamed off disk; long MP3 / FLAC decoded about 10 s at a time (frame index + small stand-alone pieces); everything else decoded whole |
 | `renderer/js/waveform.js`, `renderer/js/speakers.js` | Multichannel waveform view and top-down speaker / ambisonic intensity map |
 | `renderer/js/app.js` | The explorer UI |
+| `lib/backup.js` | Backups of Soundfield's own data: create, list, restore, which automatic ones to clean up |
 | `lib/teamsfx.js` | Team SFX client: index sync with cursor, local search, downloads and uploads through the Lighthouse service |
 | `renderer/js/search.js` | Search parsing, synonyms (built-in list), typo tolerance, `rating:` / `has:` filters |
 | `renderer/js/whats-new.js` | Release notes for About and the "What's new" note |
@@ -178,6 +179,11 @@ Kept by Soundfield in `sounds.json` in the data folder; your audio files are nev
 - **Recently played:** the sidebar lists the last 100 sounds you played, newest first (Settings → Your data changes the number; right-click to clear).
 - **Find similar sounds:** right-click a sound (or the button in the info panel). The closest sounds are listed by the features the background listening measures (loudness over time, noisiness, onsets, pitch…), plus category, name and length. Sounds not measured yet are compared by name, category and length.
 - **Undo:** removing sounds from a project, deleting a project, clearing a rating, notes or Recently played, deleting a marker and hiding a folder show a toast with **Undo** (or Ctrl+Z while it shows).
+
+## Backups
+Settings → Your data. A backup is one small file (`Soundfield backup 2026-10-13 0830.sfbackup`, gzipped JSON) holding projects, favorites, your notes / ratings / markers / recently played, settings, libraries, category and layout choices, and where downloaded sounds came from. Not included: your sound files, caches (rebuilt automatically) and account keys.
+- **Automatic:** every day (or week, or never) while Soundfield is running, into `Documents\Soundfield Backups` or a folder you pick. Only the newest 10 automatic backups are kept (adjustable); older ones go to the Recycle Bin. Backups you make with **Back up now** are never removed.
+- **Restore:** pick one from the list or a file. Soundfield shows what it holds, saves the current state as a "before restore" backup, restores and restarts, then offers **Undo**.
 
 ## Search
 - Words narrow the list; `-word` excludes; `"exact phrase"` matches a phrase.

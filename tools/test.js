@@ -33,10 +33,11 @@ function run(script, extraEnv = {}) {
   });
   const line = (r.stdout || '').split(/\r?\n/).find(l => l.startsWith('[eval] ') || l.startsWith('[eval error]'));
   if (!line) throw new Error(`Soundfield gave no answer (exit ${r.status}).\n${(r.stderr || '').slice(-2000)}`);
-  if (line.startsWith('[eval error]')) throw new Error(line);
+  if (line.startsWith('[eval error]')) throw new Error(`${line} (mode ${(script.match(/"mode":"(\w+)"/) || [])[1] || '?'})`);
   return JSON.parse(line.slice(7));
 }
-const withCfg = cfg => `const CFG = ${JSON.stringify(cfg)};\n${EVAL}`;
+// A crash inside the test page is reported with its stack instead of a bare message.
+const withCfg = cfg => `const CFG = ${JSON.stringify(cfg)};\n(async () => { try { return await ${EVAL.trim().replace(/;$/, '')}; } catch (e) { return { results: [{ name: 'Test script crashed', ok: false, detail: String((e && e.stack) || e).slice(0, 800) }], metrics: {} }; } })()`;
 
 function report(title, out) {
   console.log(`\n${title}`);
@@ -64,6 +65,26 @@ async function unitTests(lib) {
   check('Region export converts AIFF to WAV', a2 && a2.frames === ai.frames && a2.codec === 'pcm' && !a2.be, a2 ? `${a2.frames} frames` : 'unreadable');
   const z = await zipListing(path.join(lib, 'Packs', 'Small Pack.zip'));
   check('Zip listing', z && z.files.length === 1 && z.total > 0 && z.zipSize > 0, z ? `${z.files.length} file, ${z.total} bytes` : 'unreadable');
+
+  // Backups: keep the newest automatic ones; manual and "before restore" ones are never pruned.
+  const backup = require('../lib/backup');
+  const ud = path.join(tmp, 'bk-userdata'), bd = path.join(tmp, 'bk');
+  fs.mkdirSync(ud, { recursive: true });
+  fs.writeFileSync(path.join(ud, 'projects.json'), JSON.stringify([{ id: 'p', name: 'Kept', items: [] }]));
+  fs.writeFileSync(path.join(ud, 'online.json'), JSON.stringify({ tsKey: 'secret' }));
+  const b1 = backup.create(ud, bd, { kind: 'manual' });
+  check('Backups leave account keys out', !b1.files.includes('online.json') && b1.files.includes('projects.json'), b1.files.join(', '));
+  const t0 = Date.now();
+  for (let i = 0; i < 5; i++) { const b = backup.create(ud, bd); fs.utimesSync(b.path, new Date(t0 - i * 864e5), new Date(t0 - i * 864e5)); }
+  const prune = backup.toPrune(backup.list(bd), 3);
+  check('Old automatic backups are picked for cleanup', prune.length === 2 && prune.every(b => b.kind === 'auto'), `${prune.length} of ${backup.list(bd).length}`);
+  fs.writeFileSync(path.join(ud, 'projects.json'), '[]');
+  backup.restore(ud, b1.path);
+  check('Restore puts the files back', JSON.parse(fs.readFileSync(path.join(ud, 'projects.json'), 'utf8'))[0].name === 'Kept');
+  fs.writeFileSync(path.join(bd, 'Soundfield backup 2026-01-01 0000.sfbackup'), 'not a backup');
+  let bad = '';
+  try { backup.read(path.join(bd, 'Soundfield backup 2026-01-01 0000.sfbackup')); } catch (e) { bad = e.message; }
+  check('A damaged backup is refused', /isn’t a Soundfield backup/.test(bad), bad);
   return { results };
 }
 
@@ -106,7 +127,7 @@ try {
     const exportDir = path.join(tmp, 'exports');
     fs.mkdirSync(exportDir);
     const team = `http://127.0.0.1:${port}`;
-    const first = run(withCfg({ mode: 'first', version: pkg.version, count, fixtures, marker, exportDir, libDir: lib, driveRoot: path.parse(tmp).root, team }), { SF_TEST: '1', SF_TEAMSFX_BASE: team });
+    const first = run(withCfg({ mode: 'first', version: pkg.version, count, fixtures, marker, exportDir, libDir: lib, driveRoot: path.parse(tmp).root, team }), { SF_TEST: '1', SF_TEAMSFX_BASE: team, SF_BACKUPS: path.join(tmp, 'backups') });
     failed += report('First start', first);
     // 3. Restart: preferences and the index must still be there (plus the sound extracted from the
     //    zip and the 3 copies made inside the library).

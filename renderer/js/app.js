@@ -516,7 +516,8 @@ async function selectIndex(i, { play = prefs.autoplay, scroll = true } = {}) {
     wave.clear('This sound has moved or been deleted. Use “Relink missing” to find it again.');
     speakers.setLayout(null);
     fillLayoutSelect();
-    $('#file-meta').innerHTML = `<div class="fname">${escapeHtml(it.name)}.${escapeHtml(it.ext)}</div><dl><dt>Was at</dt><dd>${escapeHtml(it.path)}</dd></dl>`;
+    $('#meta-info').innerHTML = `<div class="fname">${escapeHtml(it.name)}.${escapeHtml(it.ext)}</div><dl><dt>Was at</dt><dd>${escapeHtml(it.path)}</dd></dl>`;
+    renderMine();
     return;
   }
   return loadItem(it, { play });
@@ -2738,7 +2739,8 @@ async function loadOnline(r, { play = false } = {}) {
   wave.clear('Loading preview…');
   speakers.setLayout(null);
   fillLayoutSelect();
-  $('#file-meta').innerHTML = `<div class="fname">${escapeHtml(r.title)}</div>`;
+  $('#meta-info').innerHTML = `<div class="fname">${escapeHtml(r.title)}</div>`;
+  renderMine();
   let file = null;
   const dl = S.downloads[r.key];
   if (dl && await api.probe(dl.path).catch(() => null)) file = dl.path;
@@ -2870,7 +2872,8 @@ async function applyOutputDevice() {
 const settingsUI = createSettings({
   api, prefs, savePrefs, apply: applySetting, toast, escapeHtml, fmtBytes,
   actions: {
-    prettyDir, setDupExcluded, showAbout, clearRecent,
+    prettyDir, setDupExcluded, showAbout, clearRecent, restoreBackup,
+    backupNow: async () => { try { const b = await api.backup.now(); toast(`Backed up (${fmtBytes(b.size)})`); } catch (err) { toast(`Backup failed: ${ipcMessage(err)}`, 6000); } },
     recentCount: () => S.mine.recent.length,
     hiddenFolders: () => prefs.hiddenFolders.map(h => {
       const lib = S.libs.find(l => l.id === h.lib);
@@ -3162,6 +3165,37 @@ function renderSimBanner() {
   b.querySelector('[data-a=close]').addEventListener('click', () => { S.similar = null; S.scope = { type: 'all' }; renderTree(); applyFilters(); });
 }
 
+// ------------------------------------------------------------------ backups
+// Restores one of Soundfield's own backups (Settings → Your data): shows what it holds, then the
+// main process saves the current state as a "before restore" backup, restores and restarts.
+async function restoreBackup(file) {
+  file = file || await api.backup.pick();
+  if (!file) return null;
+  let info;
+  try { info = await api.backup.info(file); } catch (err) { toast(ipcMessage(err), 6000); return null; }
+  const when = new Date(info.createdAt).toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'short' });
+  const n = (x, one, many) => `${x.toLocaleString()} ${x === 1 ? one : many}`;
+  const card = await modal({
+    title: 'Restore this backup?',
+    sub: `From <b>${escapeHtml(when)}</b>${info.version ? ` (Soundfield ${escapeHtml(info.version)})` : ''}: ${n(info.projects, 'project', 'projects')}, ${n(info.favorites, 'favorite', 'favorites')}, ${n(info.rated, 'rated sound', 'rated sounds')}, ${n(info.notes, 'sound', 'sounds')} with notes, ${n(info.markers, 'marker', 'markers')}, ${n(info.libraries, 'library', 'libraries')} and your settings.`
+      + '<br><br>They replace what Soundfield has now; your sound files aren’t touched. The current state is backed up first, and Soundfield restarts.',
+    ok: 'Restore and restart', okClass: 'danger',
+  });
+  if (!card) return null;
+  try {
+    const r = await api.backup.restore(file);
+    toast(r.restarting ? 'Restored. Restarting…' : 'Backup restored.', 4000);
+    return r;
+  } catch (err) { toast(`Restore failed: ${ipcMessage(err)}`, 7000); return null; }
+}
+// After a restore: say what was restored, with Undo (restores the "before restore" backup).
+async function showRestoreNote() {
+  const note = await api.backup.note().catch(() => null);
+  if (!note) return;
+  const when = note.createdAt ? new Date(note.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : note.from;
+  toast(`Restored the backup from ${when}`, 9000, () => { if (note.undo) api.backup.restore(note.undo).catch(err => toast(`Undo failed: ${ipcMessage(err)}`, 6000)); });
+}
+
 // ------------------------------------------------------------------ Team SFX: adding sounds
 // Uploads library sounds to the team library (through Lighthouse, with your Soundfield key).
 // Everyone sees them after their next index refresh. 150 MB per file, 300 uploads a day per key.
@@ -3340,5 +3374,6 @@ async function boot() {
     findDupes, showAbout, settingsUI, applySetting, setMatch, setVarispeed, setSpecView, setSpecRange,
     setRating, ratingOf, addMarker, findSimilar, uploadToTeam, setFolderHidden, relinkMine, runUndo, clearRecent, isHiddenItem, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
   showWhatsNew();
+  showRestoreNote();
 }
 boot();

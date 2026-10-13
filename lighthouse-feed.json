@@ -38,5 +38,6 @@
   {"id": "undo-toast", "title": "Undo for everyday changes", "summary": "Removing sounds from a project, deleting a project, clearing ratings or notes and hiding folders can be undone.", "date": "2026-10-13"},
   {"id": "sharp-spectrogram", "title": "Sharper spectrograms", "summary": "Short sounds and zoomed-in views get a spectrogram column per screen pixel, with smooth low frequencies.", "date": "2026-10-13"},
   {"id": "team-sfx-source", "title": "Team SFX in Soundfield", "summary": "Search, preview and save sounds from the shared Team SFX library in the Online tab, with each folder licence and credits shown.", "date": "2026-10-13"},
-  {"id": "team-sfx-upload", "title": "Add sounds to Team SFX from Soundfield", "summary": "Right-click library sounds to upload them into a Team SFX folder, with optional credits for that folder.", "date": "2026-10-13"}
+  {"id": "team-sfx-upload", "title": "Add sounds to Team SFX from Soundfield", "summary": "Right-click library sounds to upload them into a Team SFX folder, with optional credits for that folder.", "date": "2026-10-13"},
+  {"id": "data-backups", "title": "Automatic backups of your Soundfield data", "summary": "Projects, favorites, notes, ratings, markers and settings are backed up daily with old backups cleaned up, and can be restored with undo.", "date": "2026-10-13"}
 ]}

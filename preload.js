@@ -44,6 +44,15 @@ contextBridge.exposeInMainWorld('api', {
     code: text => ipcRenderer.invoke('online:code', text),
     disconnect: () => ipcRenderer.invoke('online:disconnect'),
   },
+  backup: {
+    list: () => ipcRenderer.invoke('backup:list'),
+    now: () => ipcRenderer.invoke('backup:now'),
+    pick: () => ipcRenderer.invoke('backup:pick'),
+    info: file => ipcRenderer.invoke('backup:info', file),
+    restore: file => ipcRenderer.invoke('backup:restore', file),
+    note: () => ipcRenderer.invoke('backup:note'),
+    openDir: () => ipcRenderer.invoke('backup:openDir'),
+  },
   teamsfx: {
     settings: () => ipcRenderer.invoke('teamsfx:settings'),
     set: s => ipcRenderer.invoke('teamsfx:set', s),

@@ -86,7 +86,7 @@ export function createSettings(ctx) {
     { section: 'libraries', type: 'custom', render: renderDupFolders, label: 'Folders left out of duplicate searches', desc: 'Right-click a folder under Libraries to add one. Click ✕ to include it again.', keywords: 'duplicates exclude' },
     // ---------------------------------------------------------------- search
     { section: 'search', key: 'searchSynonyms', type: 'toggle', def: true, label: 'Find synonyms', desc: 'Searching “gun” also finds rifle, pistol, gunshot…, listed after the exact matches. Put a word in quotes ("gun") to search for just that word.' },
-    { section: 'search', key: 'searchTypos', type: 'toggle', def: true, label: 'Forgive small typos', desc: 'When no sound contains a word, close spellings that do exist are searched instead: “explsion” finds explosion.' },
+    { section: 'search', key: 'searchTypos', type: 'toggle', def: true, label: 'Forgive small typos', desc: 'When a search finds nothing, close spellings that exist in your library are tried instead: “explsion” finds explosion.' },
     { section: 'search', type: 'custom', render: renderUserSynonyms, label: 'Your own synonyms', desc: 'One group per line, words separated by commas or =, e.g.  whoosh = swish, swoosh. Added to the built-in list.', keywords: 'words aliases' },
     { section: 'search', type: 'custom', render: renderSearchHelp, label: 'Search tricks', desc: '', keywords: 'rating stars notes markers filter' },
     // ---------------------------------------------------------------- accounts
@@ -103,6 +103,11 @@ export function createSettings(ctx) {
     { section: 'safety', key: 'safety.networkDelete', type: 'select', def: SAFETY_DEFAULTS.networkDelete, label: 'Deleting on network or USB drives', desc: 'These drives have no Recycle Bin, so a delete there is permanent.',
       options: [['ask', 'Warn me, then let me delete'], ['refuse', 'Never delete there']] },
     // ---------------------------------------------------------------- your data
+    { section: 'data', type: 'custom', render: renderBackups, label: 'Backups', desc: 'Projects, favorites, your notes, ratings and markers, settings and libraries in one small file. Your sound files and account keys aren’t included.', keywords: 'backup restore undo export' },
+    { section: 'data', key: 'backupEvery', type: 'select', def: 'daily', label: 'Back up automatically', desc: 'A backup is made when Soundfield is running and the last one is this old.',
+      options: [['daily', 'Every day'], ['weekly', 'Every week'], ['off', 'Never (only Back up now)']] },
+    { section: 'data', key: 'backupKeep', type: 'number', def: 10, min: 1, max: 100, step: 1, unit: 'backups', label: 'Automatic backups to keep', desc: 'Older automatic backups go to the Recycle Bin. Ones you make with Back up now are never removed.' },
+    { section: 'data', key: 'backupDir', type: 'folder', def: '', defLabel: 'Documents\\Soundfield Backups', pickTitle: 'Folder for Soundfield backups', label: 'Backup folder', desc: 'Pick a folder on another drive, or one your cloud storage syncs, to keep a copy off this disk.' },
     { section: 'data', key: 'recentMax', type: 'number', def: 100, min: 10, max: 1000, step: 10, unit: 'sounds', label: 'Recently played keeps', desc: 'How many of the last sounds you played are listed under Recently played.', extra: 'recent' },
     { section: 'data', type: 'custom', render: renderDataDir, label: 'Data folder', desc: 'Libraries, projects, settings, caches and the problem log. Your sound files are never stored here.', keywords: 'appdata settings.json' },
     // ---------------------------------------------------------------- look & feel
@@ -300,7 +305,7 @@ export function createSettings(ctx) {
 
   function renderUserSynonyms(el) {
     const ta = document.createElement('textarea');
-    ta.className = 'set-text';
+    ta.className = 'set-area';
     ta.rows = 4;
     ta.spellcheck = false;
     ta.placeholder = 'whoosh = swish, swoosh\nfoley feet = footsteps';
@@ -347,6 +352,33 @@ export function createSettings(ctx) {
     b.textContent = 'Set up…';
     b.addEventListener('click', async () => { await actions.openAccount(which); renderAccount(el, which); });
     el.replaceChildren(line, b);
+  }
+
+  async function renderBackups(el) {
+    el.innerHTML = '<span class="set-muted">Loading…</span>';
+    const { dir, items } = await api.backup.list().catch(() => ({ dir: '', items: [] }));
+    const when = t => new Date(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    const btn = (label, fn, title = '') => { const b = document.createElement('button'); b.className = 'set-btn'; b.textContent = label; b.title = title; b.addEventListener('click', fn); return b; };
+    const bar = document.createElement('div');
+    bar.className = 'set-btns';
+    bar.append(
+      btn('Back up now', async () => { await actions.backupNow(); renderBackups(el); }),
+      btn('Restore from a file…', () => actions.restoreBackup()),
+      btn('Open folder', () => api.backup.openDir(), dir),
+    );
+    const list = document.createElement('div');
+    list.className = 'set-backups';
+    if (!items.length) list.innerHTML = '<span class="set-muted">No backups yet.</span>';
+    for (const b of items.slice(0, 6)) {
+      const row = document.createElement('div');
+      row.className = 'set-backup';
+      const t = document.createElement('span');
+      t.textContent = `${when(b.at)} · ${fmtBytes(b.size)}${b.kind === 'auto' ? '' : ` · ${b.kind}`}`;
+      t.title = b.path;
+      row.append(t, btn('Restore…', () => actions.restoreBackup(b.path)));
+      list.appendChild(row);
+    }
+    el.replaceChildren(bar, list);
   }
 
   async function renderDataDir(el) {

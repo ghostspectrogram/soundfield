@@ -42,6 +42,8 @@
     check('Spectrogram level range is remembered', sf.prefs.specRange === 95 && sf.wave.specRange === 95 && document.querySelector('#spec-range-in').value === '95', `${sf.prefs.specRange} dB`);
     const rainR = S.items.find(it => /Rain Ambience Loop/.test(it.rec.rel));
     check('Ratings are kept', rainR && (S.mine.sounds[rainR.path] || {}).r === 5, rainR ? `${(S.mine.sounds[rainR.path] || {}).r} stars` : 'not found');
+    await until(() => /Restored the backup/.test(document.querySelector('#toast').textContent), 4000);
+    check('After a restore, Undo is offered', /Restored the backup/.test(document.querySelector('#toast').textContent) && !!document.querySelector('#toast button'), document.querySelector('#toast').textContent.slice(0, 60));
     check('Short sounds are measured in the background', !!bg, bg ? `Pack Hit: ${bg[0]} LUFS` : 'not measured');
     return { results, metrics };
   }
@@ -431,5 +433,18 @@
   if (window.gc) window.gc();
   if (performance.memory) metrics.heapMB = +(performance.memory.usedJSHeapSize / 1048576).toFixed(1);
   await wait(600); // let the settings save go out
+
+  // Backups (last: a restore freezes Soundfield's data files until the restart)
+  const B = window.api.backup;
+  let made;
+  try { made = await B.now(); } catch (err) { check('Back up now', false, String(err.message || err)); return { results, metrics }; }
+  const listed = await B.list();
+  check('Back up now', made && made.files.includes('sounds.json') && made.files.includes('settings.json') && listed.items[0] && listed.items[0].kind === 'manual', made ? `${made.files.length} files, ${made.size} bytes` : 'none');
+  const bInfo = await B.info(made.path);
+  check('A backup says what it holds', bInfo.projects >= 0 && bInfo.rated >= 2 && bInfo.notes >= 1 && bInfo.markers >= 1, `${bInfo.rated} rated, ${bInfo.notes} with notes, ${bInfo.markers} markers`);
+  sf.setRating([rain], 1); // changed after the backup: the restore must bring back 5 stars
+  await wait(1600);
+  const restored = await B.restore(made.path);
+  check('Restore a backup (current state saved first)', restored && !restored.restarting && /before restore/.test(restored.before), restored ? restored.files.length + ' files' : 'failed');
   return { results, metrics };
 })()

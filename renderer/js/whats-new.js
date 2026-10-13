@@ -2,6 +2,16 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.8',
+    date: '2026-10-13',
+    items: [
+      'Backups: projects, favorites, your notes, ratings and markers, settings and libraries are backed up every day into Documents\\Soundfield Backups (Settings → Your data). Only the newest 10 automatic backups are kept; older ones go to the Recycle Bin. Your sound files and account keys aren’t included.',
+      'Back up now and Restore are under Settings → Your data. Restoring shows what the backup holds, saves the current state first, restarts Soundfield, and offers Undo.',
+      'Fixed: after listening to an online sound, the notes and markers panel could disappear until restart.',
+      'Fixed: Settings text showing in a typewriter font inside boxes (since beta.6).',
+    ],
+  },
+  {
     version: '0.2.0-beta.7',
     date: '2026-10-13',
     items: [

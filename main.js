@@ -12,6 +12,7 @@ const { extractZip, extractDest, zipListing } = require('./lib/zip');
 const store = require('./lib/store');
 const online = require('./lib/online');
 const teamsfx = require('./lib/teamsfx');
+const backup = require('./lib/backup');
 
 if (process.env.SF_USERDATA) app.setPath('userData', process.env.SF_USERDATA);
 
@@ -1099,6 +1100,35 @@ async function epiFileUrl(id, fileType) {
   return url;
 }
 
+// ------------------------------------------------------------------ backups
+// Soundfield's own data (lib/backup.js) in Documents\Soundfield Backups (Settings → Your data).
+// Automatic ones every day or week; only the newest few are kept, older ones go to the Recycle Bin.
+// Restoring makes a "before restore" backup first, then restarts Soundfield.
+const backupDir = () => {
+  const d = prefsNow().backupDir;
+  return process.env.SF_BACKUPS || (typeof d === 'string' && path.isAbsolute(d) ? d : path.join(app.getPath('documents'), 'Soundfield Backups'));
+};
+const restoreNoteFile = () => path.join(app.getPath('userData'), 'restore-note.json');
+function flushForBackup() { flushSettings(); if (mineTimer) flushMine(); }
+async function pruneBackups(dir = backupDir()) {
+  const keep = Math.max(1, Math.min(100, Number(prefsNow().backupKeep) || 10));
+  for (const b of backup.toPrune(backup.list(dir), keep)) { try { await shell.trashItem(b.path); } catch {} }
+}
+async function autoBackup() {
+  const every = prefsNow().backupEvery || 'daily';
+  if (every === 'off') return;
+  // Test and speed runs use their own data folder: never write into your real backups folder.
+  if (process.env.SF_USERDATA && !process.env.SF_BACKUPS) return;
+  const dir = backupDir();
+  const last = backup.list(dir).find(b => b.kind === 'auto');
+  if (last && Date.now() - last.at < (every === 'weekly' ? 7 : 1) * 86400e3 - 3600e3) return;
+  try {
+    flushForBackup();
+    backup.create(app.getPath('userData'), dir, { kind: 'auto', version: getAppInfo().version });
+  } catch (err) { console.error('Automatic backup failed:', err.message); return; }
+  await pruneBackups(dir);
+}
+
 // ------------------------------------------------------------------ Team SFX
 // The team's shared library through the Lighthouse service (lib/teamsfx.js). Your own Soundfield key
 // is stored encrypted on this PC; the index is kept in teamsfx.json and refreshed with its cursor
@@ -1377,6 +1407,45 @@ function registerOnlineIpc() {
     return { folder: dir, done, failed };
   });
 
+  // ---------------------------------------------------------------- backups
+  ipcMain.handle('backup:list', () => ({ dir: backupDir(), items: backup.list(backupDir()).slice(0, 30) }));
+  ipcMain.handle('backup:now', () => {
+    flushForBackup();
+    return backup.create(app.getPath('userData'), backupDir(), { kind: 'manual', version: getAppInfo().version });
+  });
+  ipcMain.handle('backup:pick', async () => {
+    const r = await dialog.showOpenDialog(win, { title: 'Restore a Soundfield backup', defaultPath: backupDir(), filters: [{ name: 'Soundfield backups', extensions: ['sfbackup'] }], properties: ['openFile'] });
+    return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
+  });
+  // What a backup holds, for the confirmation: counts of projects, favorites, rated / noted sounds.
+  ipcMain.handle('backup:info', (e, file) => {
+    const j = backup.read(file);
+    const parse = (k, d) => { try { return JSON.parse(j.files[k]); } catch { return d; } };
+    const mine = parse('sounds.json', { sounds: {} }) || { sounds: {} };
+    const sounds = Object.values(mine.sounds || {});
+    return {
+      createdAt: j.createdAt, version: j.version, kind: j.kind, files: Object.keys(j.files),
+      projects: (parse('projects.json', []) || []).length, favorites: (parse('favorites.json', []) || []).length,
+      libraries: (parse('libraries.json', []) || []).length, rated: sounds.filter(s => s.r).length, notes: sounds.filter(s => s.n).length,
+      markers: sounds.reduce((t, s) => t + ((s.m && s.m.length) || 0), 0),
+    };
+  });
+  ipcMain.handle('backup:restore', (e, file) => {
+    backup.read(file); // checked before anything is touched
+    flushForBackup();
+    const before = backup.create(app.getPath('userData'), backupDir(), { kind: 'before restore', version: getAppInfo().version });
+    store.freeze(); // from here on, nothing may overwrite the restored files
+    const done = backup.restore(app.getPath('userData'), file);
+    fs.writeFileSync(restoreNoteFile(), JSON.stringify({ from: path.basename(file), createdAt: done.createdAt, undo: before.path }));
+    if (!process.env.SF_TEST) setTimeout(() => { app.relaunch(); app.exit(0); }, 300);
+    return { ...done, before: before.path, restarting: !process.env.SF_TEST };
+  });
+  // After a restore and restart: what was restored (once), so the window can offer Undo.
+  ipcMain.handle('backup:note', () => {
+    try { const n = JSON.parse(fs.readFileSync(restoreNoteFile(), 'utf8')); fs.unlinkSync(restoreNoteFile()); return n; } catch { return null; }
+  });
+  ipcMain.handle('backup:openDir', () => { fs.mkdirSync(backupDir(), { recursive: true }); shell.openPath(backupDir()); });
+
   ipcMain.handle('epidemic:settings', () => publicEpi());
   // Keys are only replaced when a new one is typed; forget: 'apiKey' | 'accountKey' removes one.
   ipcMain.handle('epidemic:set', (e, { apiKey, accountKey, forget } = {}) => {
@@ -1442,6 +1511,8 @@ app.whenReady().then(async () => {
     if (!process.env.SF_NO_SCAN) setTimeout(() => libraries.forEach(l => queueScan(l.id)), 1500); // SF_NO_SCAN: speed tests on a copy of the index
     setTimeout(() => prunePreviews(true), 8000);
     setTimeout(cleanRegions, 15000);
+    setTimeout(autoBackup, 45000);
+    setInterval(autoBackup, 3 * 3600e3);
     setInterval(cleanRegions, 6 * 3600e3);
   });
 });

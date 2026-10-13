@@ -13,6 +13,26 @@ const store = require('./lib/store');
 const online = require('./lib/online');
 
 if (process.env.SF_USERDATA) app.setPath('userData', process.env.SF_USERDATA);
+
+// ------------------------------------------------------------------ problem log
+// Errors and warnings (from here and from the window) go to logs\soundfield.log in the data
+// folder, rotated at 1 MB, so Settings → About can copy a problem report.
+const logFile = () => path.join(app.getPath('userData'), 'logs', 'soundfield.log');
+function logLine(level, args) {
+  try {
+    const f = logFile();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    try { if (fs.statSync(f).size > 1 << 20) fs.renameSync(f, f + '.1'); } catch {}
+    const text = args.map(a => (a instanceof Error ? a.stack || a.message : typeof a === 'string' ? a : (() => { try { return JSON.stringify(a); } catch { return String(a); } })())).join(' ');
+    fs.appendFileSync(f, `${new Date().toISOString()} ${level} ${text.slice(0, 4000)}\n`);
+  } catch {}
+}
+for (const level of ['error', 'warn']) {
+  const orig = console[level].bind(console);
+  console[level] = (...a) => { orig(...a); logLine(level.toUpperCase(), a); };
+}
+process.on('uncaughtException', err => console.error('uncaught', err));
+process.on('unhandledRejection', err => console.error('unhandled rejection', err));
 // Our own taskbar identity (so Windows shows the Soundfield icon, not Electron's).
 if (process.platform === 'win32') app.setAppUserModelId('com.soundfield.app');
 const DEBUG = !!process.env.SF_DEBUG;
@@ -215,6 +235,7 @@ function pumpAnalysis() {
   const id = analysisQueue.shift();
   const lib = libraries.find(l => l.id === id);
   if (!lib || lib.offline) return pumpAnalysis();
+  if (prefsNow().backgroundSorting === false) { analysisQueue.length = 0; return; } // turned off in Settings
   const epi = new Set(Object.values(store.downloads()).filter(d => d.source === 'epidemic').map(d => path.resolve(d.path).toLowerCase()));
   const records = store.index(id).filter(r => !epi.has(path.join(lib.path, r.rel).toLowerCase()));
   const cache = store.analysis(id);
@@ -322,6 +343,7 @@ function getDragIcon() {
 // survive browser-storage wipes and can be backed up. Saves are batched.
 let settings = null;
 let settingsTimer = null, settingsDirty = false;
+const prefsNow = () => loadSettings().prefs || {};
 function loadSettings() {
   if (!settings) settings = store.settings() || { prefs: null };
   return settings;
@@ -409,8 +431,10 @@ function getAppInfo() {
   return appInfo;
 }
 
+// Settings → Saving & files can point this elsewhere.
 function regionDir() {
-  return path.join(app.getPath('documents'), 'Soundfield Regions');
+  const custom = prefsNow().regionDir;
+  return typeof custom === 'string' && path.isAbsolute(custom) ? custom : path.join(app.getPath('documents'), 'Soundfield Regions');
 }
 
 // ------------------------------------------------------------------ IPC
@@ -796,13 +820,54 @@ function registerIpc() {
   ipcMain.on('settings:getSync', e => { e.returnValue = loadSettings().prefs; });
   ipcMain.on('settings:save', (e, prefs) => {
     if (!prefs || typeof prefs !== 'object') return;
+    const old = prefsNow();
     loadSettings().prefs = prefs;
+    // Settings that take effect here right away.
+    if (old.backgroundSorting !== false && prefs.backgroundSorting === false) {
+      analysisQueue.length = 0;
+      if (analyzing) analyzing.w.terminate();
+    } else if (old.backgroundSorting === false && prefs.backgroundSorting !== false) libraries.forEach(l => queueAnalysis(l.id));
+    if (old.previewCacheMB !== prefs.previewCacheMB) prunePreviews(true);
     settingsDirty = true;
     clearTimeout(settingsTimer);
     settingsTimer = setTimeout(flushSettings, 400);
   });
   ipcMain.handle('app:info', () => getAppInfo());
   ipcMain.handle('app:openDataDir', () => shell.openPath(app.getPath('userData')));
+  ipcMain.on('app:log', (e, msg) => logLine('WINDOW', [String(msg)]));
+  ipcMain.handle('app:pickFolder', async (e, title, current) => {
+    const r = await dialog.showOpenDialog(win, { title: String(title || 'Choose a folder'), defaultPath: typeof current === 'string' && current ? current : undefined, properties: ['openDirectory', 'createDirectory'] });
+    return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
+  });
+  // Version, system and the most recent problems, for pasting into a bug report.
+  ipcMain.handle('app:problemReport', () => {
+    const i = getAppInfo();
+    let lines = [];
+    for (const f of [logFile() + '.1', logFile()]) { try { lines = lines.concat(fs.readFileSync(f, 'utf8').split('\n').filter(Boolean)); } catch {} }
+    const sounds = libraries.reduce((t, l) => t + (l.count || 0), 0);
+    return [
+      `Soundfield ${i.version}${i.builtAt ? ` (built ${i.builtAt}${i.commit ? ', ' + i.commit : ''})` : ' (from source)'}`,
+      `Windows ${require('os').release()} · Electron ${i.electron} · ${libraries.length} libraries, ${sounds.toLocaleString()} sounds`,
+      '',
+      lines.length ? `Recent problems (${Math.min(150, lines.length)} of ${lines.length}):` : 'No problems logged.',
+      ...lines.slice(-150),
+    ].join('\r\n');
+  });
+  ipcMain.handle('cache:previewSize', () => {
+    try { return fs.readdirSync(previewDir()).reduce((t, f) => { try { return t + fs.statSync(path.join(previewDir(), f)).size; } catch { return t; } }, 0); } catch { return 0; }
+  });
+  ipcMain.handle('cache:clearPreviews', () => {
+    let freed = 0;
+    const busy = new Set(previewJobs.keys());
+    try {
+      for (const f of fs.readdirSync(previewDir())) {
+        const p = path.join(previewDir(), f);
+        if (busy.has(p)) continue;
+        try { const s = fs.statSync(p).size; fs.unlinkSync(p); freed += s; } catch {}
+      }
+    } catch {}
+    return freed;
+  });
 
   ipcMain.on('drag:start', async (e, p, region) => {
     if (Array.isArray(p)) { // several selected sounds (the renderer checks the count / size limits first)
@@ -934,11 +999,12 @@ function prunePreviews(force) {
     } catch {}
   }
   list.sort((a, b) => b.t - a.t);
+  const capMB = Math.max(50, Number(prefsNow().previewCacheMB) || 300); // Settings → Saving & files
   let total = 0;
   list.forEach((f, i) => {
     total += f.size;
     const recent = Date.now() - f.t < 600e3; // may be playing right now
-    if (!recent && (i >= 300 || total > 300 * 1024 * 1024)) { try { fs.unlinkSync(f.p); } catch {} }
+    if (!recent && (i >= 300 || total > capMB * MB)) { try { fs.unlinkSync(f.p); } catch {} }
   });
 }
 
@@ -1036,9 +1102,11 @@ function registerOnlineIpc() {
     downloads[r.key] = entry;
     store.saveDownloads(downloads);
     const line = `${path.relative(root, dest)}\r\n    ${online.attributionText(r)}\r\n    ${lic.credit ? 'Credit required: include the line above in your credits.' : 'No credit required (you may still credit the creator).'}\r\n\r\n`;
-    const credits = path.join(root, 'Credits.txt');
-    if (!fs.existsSync(credits)) fs.writeFileSync(credits, '﻿Sounds downloaded with Soundfield, with their licences.\r\nKeep this file: it is your record of where each sound came from.\r\n\r\n');
-    fs.appendFileSync(credits, line);
+    if (prefsNow().writeCredits !== false) { // Settings → Saving & files
+      const credits = path.join(root, 'Credits.txt');
+      if (!fs.existsSync(credits)) fs.writeFileSync(credits, '﻿Sounds downloaded with Soundfield, with their licences.\r\nKeep this file: it is your record of where each sound came from.\r\n\r\n');
+      fs.appendFileSync(credits, line);
+    }
 
     const low = root.toLowerCase();
     let lib = libraries.find(l => { const p = path.resolve(l.path).toLowerCase(); return low === p || low.startsWith(p.endsWith(path.sep) ? p : p + path.sep); });

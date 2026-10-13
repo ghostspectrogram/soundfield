@@ -17,5 +17,7 @@
   {"id": "size-checks-before-big-jobs", "title": "Size and free-space checks before big copies", "summary": "Materialize, zip, extract and downloads show their size first, stop if the drive is too full, ask twice for very large jobs and can be cancelled cleanly.", "date": "2026-10-13"},
   {"id": "project-size-stat", "title": "Project size at a glance", "summary": "Each project shows how much disk space it would take if materialized, before you start the copy.", "date": "2026-10-13"},
   {"id": "permanent-delete-warning", "title": "Warning before deletes that can't be undone", "summary": "Recycling files on a network or USB drive, where Windows has no Recycle Bin, gets its own warning, and huge batches ask twice.", "date": "2026-10-13"},
-  {"id": "safe-zip-extract", "title": "Zip extraction that never overwrites", "summary": "Extracting keeps files that are already there instead of overwriting them, checks free space, and warns about zips that unpack to far more than their own size.", "date": "2026-10-13"}
+  {"id": "safe-zip-extract", "title": "Zip extraction that never overwrites", "summary": "Extracting keeps files that are already there instead of overwriting them, checks free space, and warns about zips that unpack to far more than their own size.", "date": "2026-10-13"},
+  {"id": "settings-panel", "title": "Searchable Settings panel", "summary": "One section at a time with a plain description under every setting, a search box and per-section reset; every change applies at once and is remembered.", "date": "2026-10-13"},
+  {"id": "problem-report", "title": "Copy a problem report", "summary": "Errors are logged quietly, and one click copies the version, system and recent errors to paste into a bug report.", "date": "2026-10-13"}
 ]}

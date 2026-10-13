@@ -1,10 +1,9 @@
 // Multichannel waveform view: one lane per channel, zoom / pan, click to
 // play from a point, drag to select, drag a selection out to a DAW.
 
-// Level scale beside the waveform: −40 … 0 dBFS.
-const DB_FLOOR = -40;
-const DB_FLOOR_LIN = 0.01; // −40 dBFS as a sample value
-const DB_MARKS = [0, -5, -10, -15, -20, -25, -30, -35, -40];
+// Level scale beside the waveform: floor … 0 dBFS, evenly spaced (floor −40 by default, or −60;
+// Settings → Waveform). Marks every 5 dB.
+const DEFAULT_FLOOR = -40;
 
 // dBFS text for a linear level (1 = 0 dBFS). Float files can go above 0.
 export function fmtDb(v) {
@@ -48,6 +47,8 @@ export class WaveView {
     this.cb = {};
     this.message = '';
     this.levels = null;
+    this.setDbFloor(DEFAULT_FLOOR);
+    this.peakWarn = Math.pow(10, -1 / 20); // a peak readout turns red at −1 dBFS or louder
     new ResizeObserver(() => this.resize()).observe(this.wrap);
     this.bind();
   }
@@ -444,7 +445,7 @@ export class WaveView {
       if (!pk) return;
       pk.textContent = lv ? fmtDb(lv.peak) : '';
       pk.title = lv ? `Peak ${fmtDb(lv.peak)} dBFS · RMS ${fmtDb(lv.rms)} dBFS` : '';
-      pk.classList.toggle('hot', !!lv && lv.peak >= 0.891); // −1 dBFS or louder
+      pk.classList.toggle('hot', !!lv && lv.peak >= this.peakWarn);
     });
   }
 
@@ -452,11 +453,25 @@ export class WaveView {
   // −40 dBFS at the centre line to 0 dBFS at the edge, so the dB scale is even.
   amp01(v) {
     const a = v < 0 ? -v : v;
-    if (a <= DB_FLOOR_LIN) return 0;
-    const t = Math.min(1, (20 * Math.log10(a) - DB_FLOOR) / -DB_FLOOR);
+    if (a <= this.floorLin) return 0;
+    const t = Math.min(1, (20 * Math.log10(a) - this.dbFloor) / -this.dbFloor);
     return v < 0 ? -t : t;
   }
-  dbOffset(db) { return (db - DB_FLOOR) / -DB_FLOOR; }
+  dbOffset(db) { return (db - this.dbFloor) / -this.dbFloor; }
+
+  setDbFloor(db) {
+    this.dbFloor = db === -60 ? -60 : -40;
+    this.floorLin = Math.pow(10, this.dbFloor / 20);
+    this.marks = [];
+    for (let d = 0; d >= this.dbFloor; d -= 5) this.marks.push(d);
+    this.draw();
+  }
+
+  setPeakWarn(db) {
+    this.peakWarn = Math.pow(10, Math.max(-12, Math.min(0, Number(db) || 0)) / 20);
+    this.showLevels();
+    this.draw();
+  }
 
   // dBFS marks for each lane (−40 … 0), matching the waveform and its vertical zoom;
   // a marker shows each channel's peak.
@@ -477,9 +492,9 @@ export class WaveView {
       const amp = (laneH / 2 - 2 * dpr) * this.vzoom;
       if (ch > 0) { c.fillStyle = 'rgba(255,255,255,0.06)'; c.fillRect(0, Math.round(y0), W, 1); }
       // Labels at one fixed step for the whole lane (every 5, 10 or 20 dB), so the scale is always even.
-      const per5 = (5 / -DB_FLOOR) * amp; // pixels between 5 dB marks
+      const per5 = (5 / -this.dbFloor) * amp; // pixels between 5 dB marks
       const step = per5 >= 11 * dpr ? 5 : per5 * 2 >= 11 * dpr ? 10 : 20;
-      for (const db of DB_MARKS) {
+      for (const db of this.marks) {
         const off = this.dbOffset(db) * amp;
         if (off > laneH / 2 - 1 * dpr) continue; // above the lane at this zoom
         const yt = Math.round(mid - off), yb = Math.round(mid + off);
@@ -494,9 +509,9 @@ export class WaveView {
       }
       // This channel's peak.
       const lv = this.levels && this.levels.ch[ch];
-      if (lv && lv.peak > DB_FLOOR_LIN) {
+      if (lv && lv.peak > this.floorLin) {
         const off = Math.min(laneH / 2 - 1 * dpr, this.amp01(lv.peak) * amp);
-        c.fillStyle = lv.peak >= 0.891 ? '#fc8181' : this.layout.chans[ch].color;
+        c.fillStyle = lv.peak >= this.peakWarn ? '#fc8181' : this.layout.chans[ch].color;
         for (const y of [mid - off, mid + off]) {
           c.beginPath();
           c.moveTo(W - 6 * dpr, y - 3 * dpr); c.lineTo(W, y); c.lineTo(W - 6 * dpr, y + 3 * dpr);
@@ -510,8 +525,8 @@ export class WaveView {
   // Faint level guides across the waveform at the same dB marks.
   paintGuides(c, W, mid, amp, laneH, dpr) {
     c.fillStyle = 'rgba(255,255,255,0.035)';
-    for (const db of DB_MARKS) {
-      if (db === DB_FLOOR) continue; // that's the centre line
+    for (const db of this.marks) {
+      if (db === this.dbFloor) continue; // that's the centre line
       const off = this.dbOffset(db) * amp;
       if (off > laneH / 2 - 1 * dpr) continue;
       c.fillRect(0, Math.round(mid - off), W, 1);

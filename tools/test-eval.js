@@ -183,6 +183,34 @@
   log = await D({ open: null });
   check('Warns before linking a whole drive', added.length === 0 && has(log, /a whole drive/), added.length ? 'linked it' : 'skipped');
 
+  // ---------------------------------------------------------------- settings panel
+  sf.settingsUI.open('waveform');
+  const panel = document.querySelector('#settings');
+  check('Settings opens', !panel.hidden && /Level scale range/.test(panel.textContent), panel.hidden ? 'hidden' : 'open');
+  const floorSel = [...panel.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === '-60'));
+  floorSel.value = '-60'; floorSel.dispatchEvent(new Event('change'));
+  check('A setting applies at once and is saved', sf.wave.dbFloor === -60 && sf.prefs.dbFloor === -60, `scale ${sf.wave.dbFloor}, saved ${sf.prefs.dbFloor}`);
+  const num = panel.querySelector('input[type=number]');
+  num.value = '7'; num.dispatchEvent(new Event('change'));
+  check('Numbers are kept in range', sf.prefs.peakWarnDb === 0, `peak warning ${sf.prefs.peakWarnDb}`);
+  [...panel.querySelectorAll('button')].find(b => /^Reset /.test(b.textContent)).click();
+  check('Reset a section to defaults', sf.prefs.dbFloor === -40 && sf.prefs.peakWarnDb === -1 && sf.wave.dbFloor === -40, `floor ${sf.prefs.dbFloor}, warning ${sf.prefs.peakWarnDb}`);
+  const ss = panel.querySelector('#set-search');
+  ss.value = 'recycle'; ss.dispatchEvent(new Event('input'));
+  check('Search finds settings in any section', /network or USB/.test(panel.textContent), panel.querySelectorAll('.set-row').length + ' rows');
+  ss.value = ''; ss.dispatchEvent(new Event('input'));
+  sf.settingsUI.open('look');
+  const dens = [...panel.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'roomy'));
+  dens.value = 'roomy'; dens.dispatchEvent(new Event('change'));
+  await wait(50);
+  const rowH = document.querySelector('#list .row') && document.querySelector('#list .row').getBoundingClientRect().height;
+  check('Row height setting', rowH === 32, `${rowH}px rows`);
+  dens.value = 'normal'; dens.dispatchEvent(new Event('change'));
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('Esc closes Settings', panel.hidden);
+  const report = await window.api.problemReport();
+  check('Problem report', report.startsWith(`Soundfield ${CFG.version}`), report.split('\n')[0]);
+
   // A preference to look for after the restart
   sf.prefs.testMarker = CFG.marker;
   sf.savePrefs();

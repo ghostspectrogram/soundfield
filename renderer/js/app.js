@@ -3,6 +3,7 @@ import { WaveView, fmtTime, fmtDb, escapeHtml } from './waveform.js';
 import { SpeakerView } from './speakers.js';
 import { VList } from './vlist.js';
 import { createOnline } from './online.js';
+import { createSettings } from './settings.js';
 import { createSource } from './sources.js';
 import { detectLayout, layoutChoices } from './layouts.js';
 import { metaCategory, TYPES, TYPE_LABELS } from '../../shared/categorize.mjs';
@@ -850,7 +851,7 @@ listEl.addEventListener('mousedown', e => {
   }
   S.anchor = i;
   if (S.multi.size) setMulti([]);
-  selectIndex(i, { play: false }); // a click only selects; double-click plays
+  selectIndex(i, { play: !!prefs.clickPlays }); // by default a click only selects and double-click plays (Settings → Playback)
 });
 listEl.addEventListener('click', e => {
   if (!e.target.classList.contains('star')) return;
@@ -2526,6 +2527,43 @@ api.on('preview:progress', p => {
   wave.clear(`Loading preview… ${Math.min(99, Math.round((p.got / p.total) * 100))}%`);
 });
 
+// ------------------------------------------------------------------ settings
+const ROW_H = { compact: 22, normal: 26, roomy: 32 };
+function applyRowDensity() {
+  const h = ROW_H[prefs.rowDensity] || 26;
+  document.documentElement.style.setProperty('--row-h', h + 'px');
+  list.setRowHeight(h);
+  onlineUI.setRowHeight(h);
+}
+// Applies a setting changed in the Settings panel (it has already been saved in prefs).
+function applySetting(key, v) {
+  switch (key) {
+    case 'autoplay': setToggle('#btn-auto', !!v); break;
+    case 'loop': setToggle('#btn-loop', !!v); engine.setLoop(!!v); break;
+    case 'lfe': setToggle('#btn-lfe', !!v); engine.setLfe(!!v); break;
+    case 'monitor': $('#monitor').value = v; engine.setMode(v); updateMonitorHint(); break;
+    case 'dbFloor': wave.setDbFloor(v); break;
+    case 'peakWarnDb': wave.setPeakWarn(v); break;
+    case 'uiZoom': api.setZoom(v); break;
+    case 'rowDensity': applyRowDensity(); break;
+    case 'onlineSaveDir': onlineUI.setSaveDir(v || null, true); break;
+  }
+}
+const settingsUI = createSettings({
+  api, prefs, savePrefs, apply: applySetting, toast, escapeHtml, fmtBytes,
+  actions: {
+    prettyDir, setDupExcluded, showAbout,
+    accountStatus: which => onlineUI.accountStatus(which),
+    openAccount: which => onlineUI.openAccount(which),
+  },
+});
+$('#btn-settings').addEventListener('click', () => settingsUI.open());
+document.addEventListener('keydown', e => { if (e.ctrlKey && e.key === ',') { e.preventDefault(); settingsUI.open(); } });
+
+// Problems in this window go to the problem log (Settings → About → Copy problem report).
+window.addEventListener('error', e => api.logProblem(`${e.message} at ${e.filename}:${e.lineno}`));
+window.addEventListener('unhandledrejection', e => api.logProblem(`Unhandled: ${(e.reason && (e.reason.stack || e.reason.message)) || e.reason}`));
+
 // ------------------------------------------------------------------ toast
 let toastTimer = 0;
 function toast(msg, ms = 2600) {
@@ -2616,10 +2654,17 @@ async function boot() {
   renderProjects();
   applyFilters();
   if (S.libs.length) listEl.focus();
-  if (prefs.mode === 'online') setMode('online');
+  const start = prefs.startupTab || 'last';
+  if (start === 'online' || (start === 'last' && prefs.mode === 'online')) setMode('online');
+  // Settings that shape the view.
+  wave.setDbFloor(prefs.dbFloor);
+  if (prefs.peakWarnDb != null) wave.setPeakWarn(prefs.peakWarnDb);
+  if (prefs.uiZoom && prefs.uiZoom !== 1) api.setZoom(prefs.uiZoom);
+  if (prefs.rowDensity && prefs.rowDensity !== 'normal') applyRowDensity();
+  if (prefs.onlineSaveDir) onlineUI.setSaveDir(prefs.onlineSaveDir, true);
   window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, savePrefs, openFolder, goUp, folderChain, excludingFolder, extraCopies,
     addToProject, removeFromProject, relinkProject, openProject, projectById, exportProject, renderProjects, saveProjects, setMode, onlineUI, loadOnline,
-    findDupes, showAbout, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
+    findDupes, showAbout, settingsUI, applySetting, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
   showWhatsNew();
 }
 boot();

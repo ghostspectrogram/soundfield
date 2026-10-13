@@ -94,8 +94,7 @@ export function createOnline(ctx) {
   document.addEventListener('mousedown', e => { if (!srcMenu.hidden && !e.target.closest('#dd-src')) { srcMenu.hidden = true; srcBtn.classList.remove('open'); } });
   srcMenu.addEventListener('change', () => { prefs.onlineSources = sources(); savePrefs(); srcLabel(); if (O.query) runSearch(true); });
 
-  $('#o-settings').addEventListener('click', settingsDialog);
-  $('#o-epi').addEventListener('click', () => epidemicDialog());
+  // Freesound and Epidemic are set up from Settings → Accounts (and from the status line here).
 
   // ---------------------------------------------------------------- save folder (this session)
   // Starts at Documents\Soundfield Downloads every launch; recently used folders are remembered.
@@ -351,7 +350,7 @@ export function createOnline(ctx) {
   listEl.addEventListener('mousedown', e => {
     if (e.button !== 0 || e.target.closest('.o-save')) return;
     const [i] = itemAt(e);
-    if (i >= 0) pick(i, false); // a click only selects; double-click plays
+    if (i >= 0) pick(i, !!prefs.clickPlays); // by default a click only selects; double-click plays (Settings → Playback)
   });
   listEl.addEventListener('dblclick', e => {
     if (e.target.closest('.o-save')) return;
@@ -452,11 +451,6 @@ export function createOnline(ctx) {
   // ---------------------------------------------------------------- Freesound key + account
   async function refreshSettings() {
     try { O.settings = await api.online.settings(); } catch {}
-    const b = $('#o-settings');
-    b.classList.toggle('on', !!(O.settings && O.settings.connected));
-    b.title = !O.settings || !O.settings.hasKey ? 'Freesound: add a free API key for better search'
-      : O.settings.connected ? `Freesound account connected${O.settings.user ? ` (${O.settings.user})` : ''}: saves are original files`
-      : 'Freesound: connect your account to save original WAV files';
     renderStatus();
   }
 
@@ -536,10 +530,6 @@ export function createOnline(ctx) {
   // ---------------------------------------------------------------- Epidemic Sound
   async function refreshEpi() {
     try { O.epi = await api.epidemic.settings(); } catch {}
-    const b = $('#o-epi');
-    const ready = !!(O.epi && O.epi.hasAccountKey);
-    b.classList.toggle('on', ready);
-    b.title = ready ? 'Epidemic Sound: your account key is set (previews and WAV saves)' : 'Epidemic Sound: add your keys';
     renderStatus();
   }
 
@@ -620,6 +610,10 @@ export function createOnline(ctx) {
     },
     setMode: setOMode,
     setSaveDir,
+    setRowHeight: h => list.setRowHeight(h),
+    // For Settings → Accounts.
+    accountStatus: async which => (which === 'freesound' ? api.online.settings() : api.epidemic.settings()),
+    openAccount: which => (which === 'freesound' ? settingsDialog() : epidemicDialog()),
     destLabel,
     key,
     refresh() { list.refresh(); },

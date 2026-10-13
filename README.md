@@ -88,6 +88,22 @@ import { Engine } from 'soundfield/engine';
 ## License
 No license has been granted: all rights reserved. You're welcome to read the code; reuse requires permission from the author.
 
+## Settings
+- **Opening it:** click the gear at the top right, or press **Ctrl+,**.
+- **Layout:** one section at a time, with a plain description under every setting and a search box at the top. Changes apply immediately and are kept in `settings.json`, and every section has *Reset to defaults*.
+
+| Section | What's there |
+|---|---|
+| Playback | Single-click play, arrow-key auto-play, loop, monitor mode, LFE |
+| Waveform | Level scale range (−40 or −60 dBFS), peak warning level |
+| Saving & files | Default save folder for Soundfield search, Credits.txt on/off, folder for dragged selections, preview cache size + *Clear now* |
+| Libraries | Background sorting on/off, folders left out of duplicate searches |
+| Accounts | Freesound and Epidemic Sound setup |
+| Safety | The size / file-count limits, drag limits, preview and save limits, network-drive deletes |
+| Your data | The data folder |
+| Look & feel | Startup tab, interface size, list row height, keyboard shortcuts |
+| About | Version, release notes, **Copy problem report** (version, Windows version and recent errors from `logs\soundfield.log`) |
+
 ## Safety
 Anything that copies, deletes or downloads a lot says how big it is before it starts.
 

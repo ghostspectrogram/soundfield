@@ -25,6 +25,15 @@ export class VList {
 
   refresh() { this.paint(true); }
 
+  setRowHeight(h) {
+    if (h === this.rowH) return;
+    const top = this.el.scrollTop / this.rowH;
+    this.rowH = h;
+    this.spacer.style.height = this.items.length * h + 'px';
+    this.el.scrollTop = top * h;
+    this.paint(true);
+  }
+
   paint(force) {
     if (this.raf && !force) return;
     cancelAnimationFrame(this.raf);

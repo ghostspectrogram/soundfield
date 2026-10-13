@@ -2,6 +2,17 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.3',
+    date: '2026-10-13',
+    items: [
+      'Settings: the gear at the top right (or Ctrl+,). One section at a time, a plain description under every setting, a search box, and “Reset to defaults” per section. Changes apply right away.',
+      'New options there: play on single click; a −60 dB level scale; the peak warning level; a default save folder for Soundfield search that’s kept between launches; turning Credits.txt off; where dragged selections are saved; preview cache size with “Clear now”; turning background sorting off; interface size and list row height; which tab opens first.',
+      'All the safety limits (sizes, file counts, drag limits, network-drive deletes) are adjustable under Settings → Safety.',
+      'Freesound and Epidemic setup moved from the Online top bar to Settings → Accounts.',
+      'Settings → About → Copy problem report copies the version and recent errors, ready to paste when something goes wrong.',
+    ],
+  },
+  {
     version: '0.2.0-beta.2',
     date: '2026-10-13',
     items: [

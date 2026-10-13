@@ -1,5 +1,5 @@
 'use strict';
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
 
 const EVENTS = new Set(['scan:progress', 'lib:updated', 'lib:status', 'peaks:progress', 'dupes:progress', 'analysis:update', 'trash:progress', 'export:progress', 'online:progress', 'preview:progress', 'app:toast']);
 
@@ -58,6 +58,13 @@ contextBridge.exposeInMainWorld('api', {
   // Only answers during test runs (tools/test.js): scripted dialog answers + a log of dialogs shown.
   testDialogs: patch => ipcRenderer.invoke('test:dialogs', patch || null),
   openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
+  logProblem: msg => ipcRenderer.send('app:log', String(msg).slice(0, 4000)),
+  problemReport: () => ipcRenderer.invoke('app:problemReport'),
+  previewCacheSize: () => ipcRenderer.invoke('cache:previewSize'),
+  clearPreviewCache: () => ipcRenderer.invoke('cache:clearPreviews'),
+  pickFolder: (title, current) => ipcRenderer.invoke('app:pickFolder', title, current || null),
+  // Interface size (Settings → Look & feel): 0.8 … 1.5.
+  setZoom: f => webFrame.setZoomFactor(Math.max(0.8, Math.min(1.5, Number(f) || 1))),
   openExternal: url => ipcRenderer.invoke('open:external', url),
   exists: p => ipcRenderer.invoke('file:exists', p),
   on: (channel, cb) => {

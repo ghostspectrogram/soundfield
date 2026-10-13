@@ -44,7 +44,8 @@ The app icon lives in `build/icon.ico` / `build/icon.png`. It's drawn by `tools/
 | `shared/pcm.mjs` | PCM decoding (8/16/24/32-bit int, 32/64-bit float, LE/BE) and incremental min/max/RMS peak building |
 | `shared/categorize.mjs` | UCS / Epidemic-style categories from names and metadata, plus audio feature analysis |
 | `renderer/js/layouts.js` | Channel-layout detection and monitoring matrices: Lo/Ro downmix, binaural virtual speakers, AmbiX/FuMa decoding up to 3rd order |
-| `renderer/js/engine.js`, `renderer/worklet/player.js` | Streaming multichannel playback engine (AudioWorklet), one AudioContext per sample rate |
+| `renderer/js/engine.js`, `renderer/worklet/player.js` | Streaming multichannel playback engine (AudioWorklet), one AudioContext per sample rate, optional output device |
+| `renderer/js/sources.js`, `renderer/js/chunked.js` | Audio sources: PCM streamed off disk; long MP3 / FLAC decoded about 10 s at a time (frame index + small stand-alone pieces); everything else decoded whole |
 | `renderer/js/waveform.js`, `renderer/js/speakers.js` | Multichannel waveform view and top-down speaker / ambisonic intensity map |
 | `renderer/js/app.js` | The explorer UI |
 | `renderer/js/whats-new.js` | Release notes for About and the "What's new" note |
@@ -94,10 +95,10 @@ No license has been granted: all rights reserved. You're welcome to read the cod
 
 | Section | What's there |
 |---|---|
-| Playback | Single-click play, arrow-key auto-play, loop, monitor mode, LFE |
+| Playback | Output device, single-click play, arrow-key auto-play, loop, monitor mode, LFE |
 | Waveform | Level scale range (−40 or −60 dBFS), peak warning level |
-| Saving & files | Default save folder for Soundfield search, Credits.txt on/off, folder for dragged selections, preview cache size + *Clear now* |
-| Libraries | Background sorting on/off, folders left out of duplicate searches |
+| Saving & files | Default save folder for Soundfield search, Credits.txt on/off, folder for dragged selections and how long to keep them, preview cache size + *Clear now* |
+| Libraries | Folder watching on/off, background sorting on/off, folders left out of duplicate searches |
 | Accounts | Freesound and Epidemic Sound setup |
 | Safety | The size / file-count limits, drag limits, preview and save limits, network-drive deletes |
 | Your data | The data folder |
@@ -122,7 +123,8 @@ Anything that copies, deletes or downloads a lot says how big it is before it st
 
 ## Libraries
 - Click **+** next to *Libraries* to link a folder. Files are never copied or moved; only audio files are indexed (WAV/BWF/RF64, AIFF/AIFC, FLAC, MP3, OGG/Opus, M4A).
-- On launch, libraries quietly rescan in the background. Only new or changed files are re-read.
+- Library folders are watched: sounds added, renamed or deleted show up within a few seconds. On launch, libraries also quietly rescan in the background. Only new or changed files are re-read.
+- Long MP3 and FLAC files (2 minutes and up) are decoded about 10 seconds at a time, so even hour-long recordings use little memory.
 - Right-click a library to rescan it, remove it (your files stay untouched), or set how its 4-channel files should be read (Quad, AmbiX, or FuMa).
 - Zips that contain audio are listed. Right-click one, or use the buttons in the preview panel, to **Extract here** or **Extract to "<zip name>"**. The library then rescans automatically.
 

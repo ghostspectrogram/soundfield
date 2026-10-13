@@ -2547,7 +2547,20 @@ function applySetting(key, v) {
     case 'uiZoom': api.setZoom(v); break;
     case 'rowDensity': applyRowDensity(); break;
     case 'onlineSaveDir': onlineUI.setSaveDir(v || null, true); break;
+    case 'outputDevice': engine.setSink(v).then(ok => { if (!ok) toast('That output device can’t be used right now; playing through the Windows default.', 5000); }); break;
   }
+}
+
+// The saved output device, if it's connected; otherwise the Windows default (the choice is kept
+// for when it's plugged back in).
+async function applyOutputDevice() {
+  const id = prefs.outputDevice;
+  if (!id) return;
+  let devs = [];
+  try { devs = await navigator.mediaDevices.enumerateDevices(); } catch {}
+  const d = devs.find(x => x.kind === 'audiooutput' && x.deviceId === id);
+  if (d) engine.setSink(id);
+  else toast('Your chosen output device isn’t connected, so Soundfield is using the Windows default.', 5000);
 }
 const settingsUI = createSettings({
   api, prefs, savePrefs, apply: applySetting, toast, escapeHtml, fmtBytes,
@@ -2662,6 +2675,7 @@ async function boot() {
   if (prefs.uiZoom && prefs.uiZoom !== 1) api.setZoom(prefs.uiZoom);
   if (prefs.rowDensity && prefs.rowDensity !== 'normal') applyRowDensity();
   if (prefs.onlineSaveDir) onlineUI.setSaveDir(prefs.onlineSaveDir, true);
+  applyOutputDevice();
   window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, savePrefs, openFolder, goUp, folderChain, excludingFolder, extraCopies,
     addToProject, removeFromProject, relinkProject, openProject, projectById, exportProject, renderProjects, saveProjects, setMode, onlineUI, loadOnline,
     findDupes, showAbout, settingsUI, applySetting, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js

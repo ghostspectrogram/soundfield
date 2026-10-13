@@ -27,6 +27,19 @@ export class Engine {
     this.meters = null;
     this.iv = null;
     this.listeners = {};
+    this.sinkId = ''; // output device ('' = the system default)
+  }
+
+  // Plays through a specific output device (from enumerateDevices); '' = the system default.
+  // Resolves false if the device can't be used (e.g. it was unplugged).
+  async setSink(id) {
+    this.sinkId = id || '';
+    let ok = true;
+    for (const e of this.ctxs.values()) {
+      try { await e.ctx.setSinkId(this.sinkId); } catch { ok = false; }
+    }
+    if (!ok) { this.sinkId = ''; for (const e of this.ctxs.values()) e.ctx.setSinkId('').catch(() => {}); }
+    return ok;
   }
 
   on(ev, fn) { (this.listeners[ev] ||= []).push(fn); }
@@ -40,7 +53,7 @@ export class Engine {
   async ctxFor(sr) {
     let e = this.ctxs.get(sr);
     if (!e) {
-      const ctx = new AudioContext({ sampleRate: sr, latencyHint: 'interactive' });
+      const ctx = new AudioContext({ sampleRate: sr, latencyHint: 'interactive', ...(this.sinkId ? { sinkId: this.sinkId } : {}) });
       const master = ctx.createGain();
       master.gain.value = dbToGain(this.volumeDb);
       master.connect(ctx.destination);
@@ -224,7 +237,7 @@ export class Engine {
     const sr = this.source.sr;
     const src = this.source;
     try {
-      while (this.feed === f && !f.eos && f.sent - f.consumed < sr * (src.streaming ? 1.5 : 0.75)) {
+      while (this.feed === f && !f.eos && f.sent - f.consumed < sr * (src.streaming || src.lazy ? 1.5 : 0.75)) {
         const chunk = f.sent === 0 ? Math.round(sr * 0.1) : Math.round(sr * 0.5);
         const n = Math.min(chunk, f.re - f.cursor);
         if (n <= 0) {

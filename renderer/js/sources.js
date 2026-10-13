@@ -2,9 +2,12 @@
 // full decode, so a 2 GB ambisonic take opens as fast as a 1 s click).
 // Compressed formats are decoded once at their native sample rate.
 import { decodePcm, PeakBuilder, bucketFor } from '../../shared/pcm.mjs';
+import { ChunkedSource, CHUNKING } from './chunked.js';
 
 export function createSource(path, info) {
   if (info.codec === 'pcm' || info.codec === 'float') return new PcmSource(path, info);
+  // Long MP3 / FLAC: decoded a piece at a time (see chunked.js), so they don't fill memory.
+  if (/\.(mp3|flac)$/i.test(path) && (info.dur || 0) >= CHUNKING.minSeconds) return new ChunkedSource(path, info, () => new DecodedSource(path, info));
   return new DecodedSource(path, info);
 }
 

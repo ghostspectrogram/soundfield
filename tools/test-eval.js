@@ -21,7 +21,9 @@
     S.query = 'door'; metrics.searchMs = time(() => sf.applyFilters()); S.query = ''; sf.applyFilters();
     const big = S.projects.slice().sort((a, b) => b.items.length - a.items.length)[0];
     if (big) { sf.openProject(big); metrics.projectMs = time(() => sf.applyFilters()); metrics.projectSounds = big.items.length; S.scope = { type: 'all' }; sf.applyFilters(); }
+    if (window.gc) window.gc();
     if (performance.memory) metrics.heapMB = +(performance.memory.usedJSHeapSize / 1048576).toFixed(1);
+    try { metrics.windowMB = (await window.api.testMetrics()).filter(m => m.type === 'Tab').map(m => m.mb)[0]; } catch {}
     check('Speed run finished', true, `${metrics.sounds} sounds`);
     return { results, metrics };
   }
@@ -69,6 +71,11 @@
   S.sr = ''; sf.applyFilters();
   metrics.filterAllMs = (() => { const t = performance.now(); for (let i = 0; i < 10; i++) sf.applyFilters(); return +((performance.now() - t) / 10).toFixed(2); })();
 
+  // Long compressed files are decoded a piece at a time; lower the limits so the short test files are too.
+  const chunkMod = await import('./js/chunked.js');
+  chunkMod.CHUNKING.minSeconds = 3;
+  chunkMod.CHUNKING.segSeconds = 1;
+
   // Levels (peak per channel) for every file with a known level
   for (const f of CFG.fixtures.filter(x => x.expect.peaks)) {
     const i = S.view.findIndex(it => it.rec && it.rec.rel === f.rel);
@@ -78,6 +85,33 @@
     const lv = got ? sf.wave.levels.ch.map(c => +c.peak.toFixed(4)) : [];
     const ok = got && f.expect.peaks.every((p, c) => near(lv[c], p, 0.01));
     check(`Peak levels: ${f.rel}`, ok, got ? `expected ${f.expect.peaks.join(' / ')}, got ${lv.join(' / ')}` : 'no levels');
+  }
+
+  // Piece-by-piece decoding must match decoding the whole file, across every seam.
+  for (const f of CFG.fixtures.filter(x => x.chunked)) {
+    const i = S.view.findIndex(it => it.rec && it.rec.rel === f.rel);
+    await sf.selectIndex(i, { play: false });
+    await until(() => S.current && S.current.rec.rel === f.rel && S.source && S.source.idx, 10000);
+    const src = S.source;
+    if (!src || !src.idx) { check(`Piece-by-piece decoding: ${f.rel}`, false, 'not decoded in pieces'); continue; }
+    const bytes = await window.api.readFile(S.current.path);
+    const full = await new OfflineAudioContext(1, 1, src.sr).decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    const ref = full.getChannelData(0), mine = (await src.readFrames(0, src.frames))[0];
+    // A whole-file MP3 decode drops the encoder delay at the start; line the two up first.
+    let lag = 0;
+    if (f.chunked === 'mp3') {
+      let best = Infinity;
+      for (let L = 0; L <= 3000; L++) {
+        let e = 0;
+        for (let k = 40000; k < 44000; k += 3) e += Math.abs(mine[k + L] - ref[k]);
+        if (e < best) { best = e; lag = L; }
+      }
+    }
+    let maxErr = 0;
+    const from = f.chunked === 'mp3' ? 4608 : 0, n = Math.min(ref.length, mine.length - lag);
+    for (let k = from; k < n; k++) { const d = Math.abs(mine[k + lag] - ref[k]); if (d > maxErr) maxErr = d; }
+    const ok = src.idx.kind === f.chunked && src.idx.segs.length >= 3 && maxErr < (f.chunked === 'mp3' ? 1e-3 : 1e-6);
+    check(`Piece-by-piece decoding: ${f.rel}`, ok, `${src.idx.segs.length} pieces, offset ${lag}, largest difference ${maxErr.toExponential(1)}`);
   }
 
   // Quick switching while playing must not stop playback or report errors
@@ -148,6 +182,16 @@
   log = await D(null);
   check('Warns before materializing inside a library', r === null && has(log, /inside your library/), r === null ? 'stopped at the warning' : 'went ahead');
 
+  const est = await window.api.dupesEstimate();
+  check('Duplicate search estimates what it will read', est.files === 2 && est.bytes === 2 * door.rec.size, `${est.files} files, ${est.bytes} bytes`);
+
+  // Going ahead anyway puts 3 copies inside the library folder: folder watching should list them by itself.
+  const before = S.items.length;
+  await D({ open: CFG.libDir, box: [0] });
+  r = await window.api.exportProject({ mode: 'copy', name: 'Watched copies', items: expItems, layout: 'flat', manifest: true });
+  const seen = await until(() => S.items.length === before + 3, 20000);
+  check('New files in a library folder show up by themselves', r && r.count === 3 && seen, `${S.items.length - before} new`);
+
   sf.prefs.safety = { confirmFiles: 2 }; sf.savePrefs(); await wait(100);
   await D({ open: CFG.exportDir, box: [] });
   r = await window.api.exportProject({ mode: 'copy', name: 'Big job', items: expItems, layout: 'flat', manifest: true });
@@ -166,8 +210,6 @@
   const z2 = await window.api.extractZip(zipIt.path, 'here', zipIt.lib.id);
   check('Extract never overwrites existing files', z1 && z1.skipped === 0 && z2 && z2.skipped === 1, `first skipped ${z1 && z1.skipped}, second skipped ${z2 && z2.skipped}`);
 
-  const est = await window.api.dupesEstimate();
-  check('Duplicate search estimates what it will read', est.files === 2 && est.bytes === 2 * door.rec.size, `${est.files} files, ${est.bytes} bytes`);
 
   // A "preview" that is really a multi-GB original asks first (nothing is downloaded here: it's cancelled).
   const huge = { key: 'test:huge', source: 'archive', sourceLabel: 'Test', title: 'Huge field recording', previewIsOriginal: true, size: 3e9, previewSize: 3e9, previewUrl: 'https://example.invalid/huge.wav', previewExt: 'wav', ext: 'wav', license: 'cc0', duration: 3600 };
@@ -214,6 +256,7 @@
   // A preference to look for after the restart
   sf.prefs.testMarker = CFG.marker;
   sf.savePrefs();
+  if (window.gc) window.gc();
   if (performance.memory) metrics.heapMB = +(performance.memory.usedJSHeapSize / 1048576).toFixed(1);
   await wait(600); // let the settings save go out
   return { results, metrics };

@@ -39,6 +39,7 @@ export function createSettings(ctx) {
   const { api, prefs, savePrefs, apply, toast, escapeHtml, fmtBytes, actions } = ctx;
   const ITEMS = [
     // ---------------------------------------------------------------- playback
+    { section: 'playback', key: 'outputDevice', type: 'custom', def: '', render: renderDevices, label: 'Output device', desc: 'Where Soundfield plays sound, separately from the Windows default. Handy with an audio interface.', keywords: 'speakers headphones interface sound card' },
     { section: 'playback', key: 'clickPlays', type: 'toggle', def: false, label: 'Play on single click', desc: 'Clicking a sound plays it straight away. Off: a click selects it and a double-click plays it.' },
     { section: 'playback', key: 'autoplay', type: 'toggle', def: true, label: 'Play while moving with the arrow keys', desc: 'Each sound plays as you step through the list with ↑ / ↓. Same as the AUTO button (key A).' },
     { section: 'playback', key: 'loop', type: 'toggle', def: false, label: 'Loop', desc: 'Repeat the sound, or the selected part of it, until you stop it (key L).' },
@@ -56,8 +57,11 @@ export function createSettings(ctx) {
     { section: 'files', key: 'writeCredits', type: 'toggle', def: true, label: 'Keep a Credits.txt', desc: 'Record where each downloaded sound came from, and its licence, in Credits.txt in the save folder.' },
     { section: 'files', key: 'regionDir', type: 'folder', def: '', defLabel: 'Documents\\Soundfield Regions', pickTitle: 'Folder for selections dragged into your DAW',
       label: 'Folder for dragged selections', desc: 'When you drag part of a waveform into your DAW, it’s saved here as a new WAV.' },
+    { section: 'files', key: 'regionKeepDays', type: 'select', def: 0, number: true, extra: 'regions', label: 'Keep dragged selections for', desc: 'Older selection files go to the Recycle Bin, in case a DAW session still uses one. Only files Soundfield made are touched.',
+      options: [[0, 'Always (never clean up)'], [7, '7 days'], [30, '30 days'], [90, '90 days']] },
     { section: 'files', key: 'previewCacheMB', type: 'number', def: 300, min: 50, max: 10000, step: 50, unit: 'MB', label: 'Preview cache size', desc: 'Online previews are kept for quick replays; the oldest are removed past this size.', extra: 'cache' },
     // ---------------------------------------------------------------- libraries
+    { section: 'libraries', key: 'watchFolders', type: 'toggle', def: true, label: 'Watch folders for changes', desc: 'Sounds you add, rename or delete in your library folders show up within a few seconds. Off: they’re picked up when Soundfield starts.' },
     { section: 'libraries', key: 'backgroundSorting', type: 'toggle', def: true, label: 'Sort sounds by listening', desc: 'Sounds whose names don’t say what they are get listened to in the background to pick a category. Turn off to keep the disk quiet.' },
     { section: 'libraries', type: 'custom', render: renderDupFolders, label: 'Folders left out of duplicate searches', desc: 'Right-click a folder under Libraries to add one. Click ✕ to include it again.', keywords: 'duplicates exclude' },
     // ---------------------------------------------------------------- accounts
@@ -176,6 +180,14 @@ export function createSettings(ctx) {
       s.value = String(value(it));
       s.addEventListener('change', () => set(it, it.number ? Number(s.value) : s.value));
       ctl.appendChild(s);
+      if (it.extra === 'regions') {
+        const b = document.createElement('button');
+        b.className = 'set-btn';
+        b.textContent = 'Open folder';
+        api.regionsInfo().then(r => { b.textContent = `Open folder (${r.count.toLocaleString()} file${r.count === 1 ? '' : 's'}, ${fmtBytes(r.bytes)})`; }).catch(() => {});
+        b.addEventListener('click', () => api.openRegions());
+        ctl.appendChild(b);
+      }
     } else if (it.type === 'number') {
       const i = document.createElement('input');
       Object.assign(i, { type: 'number', min: it.min, max: it.max, step: it.step });
@@ -219,6 +231,23 @@ export function createSettings(ctx) {
   }
 
   // ---------------------------------------------------------------- custom rows
+  async function renderDevices(el) {
+    const it = ITEMS.find(x => x.key === 'outputDevice');
+    let devs = [];
+    try { devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput'); } catch {}
+    const def = devs.find(d => d.deviceId === 'default');
+    const s = document.createElement('select');
+    s.setAttribute('aria-label', it.label);
+    const add = (v, l) => { const o = document.createElement('option'); o.value = v; o.textContent = l; s.appendChild(o); };
+    add('', `Windows default${def ? ` (${def.label.replace(/^Default - /, '')})` : ''}`);
+    for (const d of devs) if (d.deviceId !== 'default' && d.deviceId !== 'communications') add(d.deviceId, d.label || 'Unnamed device');
+    const cur = value(it);
+    if (cur && !devs.some(d => d.deviceId === cur)) add(cur, 'Saved device (not connected now)');
+    s.value = cur;
+    s.addEventListener('change', () => set(it, s.value));
+    el.replaceChildren(s);
+  }
+
   function renderDupFolders(el) {
     const list = prefs.dupExclude || [];
     if (!list.length) { el.innerHTML = '<span class="set-muted">None. Every folder is included.</span>'; return; }

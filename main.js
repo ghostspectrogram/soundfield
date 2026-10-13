@@ -70,6 +70,8 @@ if (testDialogs) {
     testDialogs.log.push({ kind: 'box', title: o.title || '', message: o.message || '', detail: o.detail || '', buttons: o.buttons || [], response });
     return { response };
   };
+  // Memory use of each Soundfield process (for the speed / memory runs).
+  ipcMain.handle('test:metrics', () => app.getAppMetrics().map(m => ({ type: m.type, mb: Math.round(m.memory.workingSetSize / 1024) })));
   ipcMain.handle('test:dialogs', (e, patch) => {
     const log = testDialogs.log;
     if (patch) { Object.assign(testDialogs, patch); testDialogs.log = []; }
@@ -188,6 +190,7 @@ function pumpScans() {
       if (!libraries.includes(lib)) return; // removed mid-scan
       lib.offline = false;
       lib.scannedAt = Date.now();
+      watchLibrary(lib);
       if (m.unchanged) {
         // Same files as last time: no need to rewrite the index or resend it.
         scanning.unchanged = true;
@@ -207,6 +210,36 @@ function pumpScans() {
   });
   w.on('error', err => console.error('scan worker', err));
   w.on('exit', finish);
+}
+
+// ------------------------------------------------------------------ folder watching
+// Linked folders are watched, so sounds added, changed, renamed or deleted show up within a few
+// seconds instead of only at the next launch. A burst of changes (an extract, a big copy) leads
+// to one quick rescan; unchanged files aren't re-read. Settings → Libraries can turn it off.
+const AUDIO_OR_ZIP = /\.(wav|wave|bwf|rf64|aif|aiff|aifc|flac|mp3|ogg|oga|opus|m4a|zip)$/i;
+const watchers = new Map(); // lib id -> { w, timer }
+
+function watchLibrary(lib) {
+  if (watchers.has(lib.id) || prefsNow().watchFolders === false || process.env.SF_NO_SCAN) return;
+  let w;
+  try { w = fs.watch(lib.path, { recursive: true }); } catch { return; } // offline, or a drive that can't be watched
+  const entry = { w, timer: null };
+  watchers.set(lib.id, entry);
+  w.on('change', (type, name) => {
+    const f = String(name || '');
+    // Only sound files, zips and folders matter (a folder has no extension); skip temp files and our own Credits.txt.
+    if (f && /\.[a-z0-9]{1,5}$/i.test(f) && !AUDIO_OR_ZIP.test(f)) return;
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => queueScan(lib.id), 2500);
+  });
+  w.on('error', () => unwatchLibrary(lib.id)); // e.g. the drive was unplugged; watched again after its next scan
+}
+function unwatchLibrary(id) {
+  const e = watchers.get(id);
+  if (!e) return;
+  clearTimeout(e.timer);
+  try { e.w.close(); } catch {}
+  watchers.delete(id);
 }
 
 // ------------------------------------------------------------------ type analysis
@@ -431,6 +464,25 @@ function getAppInfo() {
   return appInfo;
 }
 
+// Selections dragged into a DAW pile up in the region folder. With "Keep dragged selections for"
+// set (Settings → Saving & files), older ones go to the Recycle Bin (restorable, in case a DAW
+// session still uses one). Only files Soundfield named itself ("name [1.20-3.45s].wav") are touched.
+const REGION_FILE = /\[\d+\.\d{2}-\d+\.\d{2}s\]\.wav$/i;
+function regionFiles() {
+  const dir = regionDir();
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch {}
+  return names.filter(n => REGION_FILE.test(n)).map(n => { const p = path.join(dir, n); try { const s = fs.statSync(p); return { p, size: s.size, t: s.mtimeMs }; } catch { return null; } }).filter(Boolean);
+}
+async function cleanRegions() {
+  const days = Number(prefsNow().regionKeepDays) || 0; // 0 = keep them all
+  if (days <= 0) return 0;
+  const old = regionFiles().filter(f => Date.now() - f.t > days * 86400e3);
+  let n = 0;
+  for (const f of old) { try { await shell.trashItem(f.p); n++; } catch (err) { console.warn('region cleanup', f.p, err.message); } }
+  return n;
+}
+
 // Settings → Saving & files can point this elsewhere.
 function regionDir() {
   const custom = prefsNow().regionDir;
@@ -603,6 +655,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('lib:remove', (e, id) => {
+    unwatchLibrary(id);
     libraries = libraries.filter(l => l.id !== id);
     const i = scanQueue.indexOf(id);
     if (i >= 0) scanQueue.splice(i, 1);
@@ -828,6 +881,9 @@ function registerIpc() {
       if (analyzing) analyzing.w.terminate();
     } else if (old.backgroundSorting === false && prefs.backgroundSorting !== false) libraries.forEach(l => queueAnalysis(l.id));
     if (old.previewCacheMB !== prefs.previewCacheMB) prunePreviews(true);
+    if (old.watchFolders !== false && prefs.watchFolders === false) [...watchers.keys()].forEach(unwatchLibrary);
+    else if (old.watchFolders === false && prefs.watchFolders !== false) libraries.forEach(l => { if (!l.offline) watchLibrary(l); });
+    if (old.regionKeepDays !== prefs.regionKeepDays) cleanRegions();
     settingsDirty = true;
     clearTimeout(settingsTimer);
     settingsTimer = setTimeout(flushSettings, 400);
@@ -853,6 +909,8 @@ function registerIpc() {
       ...lines.slice(-150),
     ].join('\r\n');
   });
+  ipcMain.handle('regions:info', () => { const f = regionFiles(); return { dir: regionDir(), count: f.length, bytes: f.reduce((t, x) => t + x.size, 0) }; });
+  ipcMain.handle('regions:open', () => { fs.mkdirSync(regionDir(), { recursive: true }); return shell.openPath(regionDir()); });
   ipcMain.handle('cache:previewSize', () => {
     try { return fs.readdirSync(previewDir()).reduce((t, f) => { try { return t + fs.statSync(path.join(previewDir(), f)).size; } catch { return t; } }, 0); } catch { return 0; }
   });
@@ -1243,6 +1301,8 @@ app.whenReady().then(async () => {
   win.webContents.once('did-finish-load', () => {
     if (!process.env.SF_NO_SCAN) setTimeout(() => libraries.forEach(l => queueScan(l.id)), 1500); // SF_NO_SCAN: speed tests on a copy of the index
     setTimeout(() => prunePreviews(true), 8000);
+    setTimeout(cleanRegions, 15000);
+    setInterval(cleanRegions, 6 * 3600e3);
   });
 });
 

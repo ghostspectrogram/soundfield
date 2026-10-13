@@ -2,6 +2,16 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.4',
+    date: '2026-10-13',
+    items: [
+      'Long MP3 and FLAC files are decoded a piece at a time instead of all at once. A 52-minute MP3 now takes about a third of the memory it used to (≈460 MB instead of ≈1.5 GB), with identical sound.',
+      'Your library folders are watched: sounds you add, rename or delete show up within a few seconds, without restarting. (Settings → Libraries)',
+      'Choose which output device Soundfield plays through, separately from the Windows default, for example your audio interface. (Settings → Playback)',
+      'Selections you drag into your DAW can be cleaned up automatically after 7, 30 or 90 days; they go to the Recycle Bin, and only files Soundfield made are touched. Off by default. (Settings → Saving & files)',
+    ],
+  },
+  {
     version: '0.2.0-beta.3',
     date: '2026-10-13',
     items: [

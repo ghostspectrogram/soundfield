@@ -23,7 +23,8 @@ fs.mkdirSync(userData, { recursive: true });
 
 // Starts Soundfield hidden, runs `script` in its window, returns what it returned.
 function run(script, extraEnv = {}) {
-  const r = spawnSync(ELECTRON, [ROOT], {
+  // --expose-gc: memory is read after a garbage collection, so the number is stable from run to run.
+  const r = spawnSync(ELECTRON, ['--js-flags=--expose-gc', ROOT], {
     env: {
       ...process.env, SF_USERDATA: userData, SF_DOWNLOADS: path.join(tmp, 'downloads'),
       SF_SNAPSHOT: path.join(tmp, 'shot.png'), SF_SNAPSHOT_DELAY: '1200', SF_EVAL_WAIT: '300', SF_EVAL: script, ...extraEnv,
@@ -76,7 +77,7 @@ try {
       if (fs.existsSync(path.join(real, f))) fs.copyFileSync(path.join(real, f), path.join(userData, f));
     }
     for (const d of ['index', 'analysis']) if (fs.existsSync(path.join(real, d))) fs.cpSync(path.join(real, d), path.join(userData, d), { recursive: true });
-    const out = run(withCfg({ mode: 'perf' }), { SF_NO_SCAN: '1' });
+    const out = run(withCfg({ mode: 'perf' }), { SF_NO_SCAN: '1', SF_TEST: '1' });
     failed += report('Speed run (copy of your library index)', out);
     const m = out.metrics;
     console.log('');
@@ -103,8 +104,9 @@ try {
     fs.mkdirSync(exportDir);
     const first = run(withCfg({ mode: 'first', version: pkg.version, count, fixtures, marker, exportDir, libDir: lib, driveRoot: path.parse(tmp).root }), { SF_TEST: '1' });
     failed += report('First start', first);
-    // 3. Restart: preferences and the index must still be there (plus the sound extracted from the zip).
-    const again = run(withCfg({ mode: 'restart', count: count + 1, marker }), { SF_NO_SCAN: '1' });
+    // 3. Restart: preferences and the index must still be there (plus the sound extracted from the
+    //    zip and the 3 copies made inside the library).
+    const again = run(withCfg({ mode: 'restart', count: count + 4, marker }), { SF_NO_SCAN: '1' });
     failed += report('Restart', again);
     failed += report('File helpers', await unitTests(lib));
     console.log(`\n  boot ${first.metrics.bootMs} ms · filter ${first.metrics.filterAllMs} ms · heap ${first.metrics.heapMB} MB`);

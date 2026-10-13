@@ -5,9 +5,10 @@ const fs = require('fs');
 const fsp = fs.promises;
 const crypto = require('crypto');
 const { Worker } = require('worker_threads');
+const { execFile } = require('child_process');
 const { probe } = require('./lib/probe');
 const { writeRegionSync } = require('./lib/region');
-const { extractZip } = require('./lib/zip');
+const { extractZip, extractDest, zipListing } = require('./lib/zip');
 const store = require('./lib/store');
 const online = require('./lib/online');
 
@@ -29,6 +30,33 @@ if (!process.env.SF_SNAPSHOT && !app.requestSingleInstanceLock()) {
   });
 }
 
+// Test runs (tools/test.js sets SF_TEST) answer dialogs from the test script instead of a person:
+// `open` / `save` are the paths to pick (null = cancel); `box` is a queue of button indexes for
+// message boxes (empty = the last button, normally Cancel / OK). Every dialog is logged.
+const testDialogs = process.env.SF_TEST ? { open: null, save: null, box: [], log: [] } : null;
+if (testDialogs) {
+  const opts = (a, b) => (b && typeof b === 'object' ? b : a) || {};
+  dialog.showOpenDialog = async (a, b) => {
+    testDialogs.log.push({ kind: 'open', title: opts(a, b).title || '' });
+    return testDialogs.open ? { canceled: false, filePaths: [].concat(testDialogs.open) } : { canceled: true, filePaths: [] };
+  };
+  dialog.showSaveDialog = async (a, b) => {
+    testDialogs.log.push({ kind: 'save', title: opts(a, b).title || '' });
+    return testDialogs.save ? { canceled: false, filePath: testDialogs.save } : { canceled: true };
+  };
+  dialog.showMessageBox = async (a, b) => {
+    const o = opts(a, b);
+    const response = testDialogs.box.length ? testDialogs.box.shift() : Math.max(0, (o.buttons || ['OK']).length - 1);
+    testDialogs.log.push({ kind: 'box', title: o.title || '', message: o.message || '', detail: o.detail || '', buttons: o.buttons || [], response });
+    return { response };
+  };
+  ipcMain.handle('test:dialogs', (e, patch) => {
+    const log = testDialogs.log;
+    if (patch) { Object.assign(testDialogs, patch); testDialogs.log = []; }
+    return log;
+  });
+}
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
@@ -44,6 +72,7 @@ let libraries = [];
 let favorites = new Set();
 let overrides = {};
 let dupesWorker = null;
+let exportJob = null; // { cancelled, w } while a project is being zipped / materialized
 let typeOverrides = {};
 
 // ------------------------------------------------------------------ window
@@ -304,6 +333,65 @@ function flushSettings() {
   store.saveSettings(settings);
 }
 
+// ------------------------------------------------------------------ safety
+// Anything that copies, deletes or downloads a lot says how big it is first, is refused when it
+// can't fit, and asks twice above the size / file-count limits (adjustable: prefs.safety).
+const GB = 1024 ** 3, MB = 1024 ** 2;
+const SPACE_MARGIN = 2 * GB; // always left free on the destination drive
+const SAFETY_DEFAULTS = require('./shared/safety.json');
+const safety = () => ({ ...SAFETY_DEFAULTS, ...(((loadSettings().prefs || {}).safety) || {}) });
+
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + u[i];
+}
+const rootOf = p => path.parse(path.resolve(p)).root;
+const driveName = p => { const r = rootOf(p); return /^[a-z]:\\$/i.test(r) ? `drive ${r.slice(0, 2).toUpperCase()}` : r.replace(/\\$/, ''); };
+
+// Free bytes on the drive holding `p` (or its nearest existing parent); null if unknown.
+function freeSpace(p) {
+  let d = path.resolve(p);
+  while (!fs.existsSync(d)) { const up = path.dirname(d); if (up === d) return null; d = up; }
+  try { const s = fs.statfsSync(d); return s.bavail * s.bsize; } catch { return null; }
+}
+
+// False (after telling the person) when `bytes` won't fit at `dest` with the margin to spare.
+async function ensureSpace(dest, bytes, what) {
+  const free = freeSpace(dest);
+  if (free == null || bytes + SPACE_MARGIN <= free) return true;
+  await dialog.showMessageBox(win, {
+    type: 'error', title: 'Not enough space', buttons: ['OK'],
+    message: `There isn't enough free space for ${what}.`,
+    detail: `It needs ${fmtBytes(bytes)}, plus ${fmtBytes(SPACE_MARGIN)} kept free for Windows, but ${driveName(dest)} has ${fmtBytes(free)} free.\n\nFree up ${fmtBytes(bytes + SPACE_MARGIN - free)} there, or choose another drive.`,
+  });
+  return false;
+}
+
+// A second confirmation for big jobs (above the size or file-count limit). `force` asks regardless.
+async function confirmBig(bytes, files, { message, detail, ok, force = false }) {
+  const s = safety();
+  if (!force && bytes < s.confirmGB * GB && files < s.confirmFiles) return true;
+  const r = await dialog.showMessageBox(win, { type: 'warning', buttons: [ok, 'Cancel'], defaultId: 1, cancelId: 1, title: 'Large job', message, detail });
+  return r.response === 0;
+}
+
+// 'network' | 'removable' | 'fixed' | 'unknown'. Network and removable drives have no Recycle Bin.
+const driveTypes = new Map();
+function driveType(p) {
+  const root = rootOf(p).toUpperCase();
+  if (root.startsWith('\\\\')) return Promise.resolve('network');
+  if (!driveTypes.has(root)) {
+    driveTypes.set(root, new Promise(resolve => {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[System.IO.DriveInfo]::new($env:SF_DRIVE).DriveType'],
+        { env: { ...process.env, SF_DRIVE: root }, windowsHide: true, timeout: 8000 },
+        (err, out) => { const t = String(out || '').trim().toLowerCase(); resolve(['network', 'removable', 'fixed'].includes(t) ? t : 'unknown'); });
+    }));
+  }
+  return driveTypes.get(root);
+}
+
 // Version, build date and commit. Packaged builds carry build-info.json, written by tools/build.js.
 let appInfo = null;
 function getAppInfo() {
@@ -362,18 +450,50 @@ function registerIpc() {
       dest = path.join(r.filePaths[0], safe);
       for (let n = 2; fs.existsSync(dest); n++) dest = path.join(r.filePaths[0], `${safe} (${n})`);
     }
-    const result = await new Promise((resolve, reject) => {
-      const w = new Worker(path.join(__dirname, 'lib', 'export-worker.js'), {
-        workerData: { mode, items, dest, layout: layout === 'keep' ? 'keep' : 'flat', manifest: manifest !== false, projectName: name },
+
+    // How big it is, whether it fits, and a second "are you sure" for huge ones.
+    const bytes = items.reduce((t, it) => t + (Number(it.size) || 0), 0);
+    const verb = mode === 'zip' ? 'Zip' : 'Copy';
+    if (!(await ensureSpace(dest, bytes, `“${name}” (${fmtBytes(bytes)})`))) return null;
+    const low = dest.toLowerCase();
+    const insideLib = mode === 'copy' && !repoint && libraries.find(l => { const p = path.resolve(l.path).toLowerCase(); return low.startsWith(p.endsWith(path.sep) ? p : p + path.sep); });
+    if (insideLib) {
+      const r = await dialog.showMessageBox(win, {
+        type: 'warning', buttons: ['Copy there anyway', 'Cancel'], defaultId: 1, cancelId: 1, title: 'Inside a library',
+        message: `The new folder would be inside your library “${insideLib.name}”.`,
+        detail: `Its ${items.length.toLocaleString()} copies would be indexed too and show up as duplicates of every sound in the project.\n\nChoose a folder outside your libraries, or tick “Point this project at the new copies” if you want the copies listed instead.`,
       });
-      w.on('message', m => {
-        if (m.type === 'progress') send('export:progress', { ...m, mode, name });
-        else if (m.type === 'done') resolve(m);
-        else if (m.type === 'error') reject(new Error(m.message));
-      });
-      w.on('error', reject);
-      w.on('exit', code => { if (code) reject(new Error('Export stopped unexpectedly')); });
-    }).finally(() => send('export:progress', { finished: true }));
+      if (r.response !== 0) return null;
+    }
+    const free = freeSpace(dest);
+    const go = await confirmBig(bytes, items.length, {
+      message: `${verb} ${items.length.toLocaleString()} sounds (${fmtBytes(bytes)})?`,
+      detail: `Into ${dest}\n\nThat's a large ${mode === 'zip' ? 'zip' : 'copy'}${free != null ? `; ${driveName(dest)} has ${fmtBytes(free)} free` : ''}. You can cancel while it runs.`,
+      ok: mode === 'zip' ? 'Zip them' : 'Copy them',
+    });
+    if (!go) return null;
+
+    let result;
+    const job = exportJob = { cancelled: false, w: null };
+    try {
+      result = await new Promise((resolve, reject) => {
+        const w = job.w = new Worker(path.join(__dirname, 'lib', 'export-worker.js'), {
+          workerData: { mode, items, dest, layout: layout === 'keep' ? 'keep' : 'flat', manifest: manifest !== false, projectName: name },
+        });
+        w.on('message', m => {
+          if (m.type === 'progress') send('export:progress', { ...m, mode, name });
+          else if (m.type === 'done') resolve(m);
+          else if (m.type === 'error') reject(new Error(m.message));
+        });
+        w.on('error', reject);
+        w.on('exit', code => { if (code) reject(new Error(job.cancelled ? 'cancelled' : 'Export stopped unexpectedly')); });
+      }).finally(() => { if (exportJob === job) exportJob = null; send('export:progress', { finished: true }); });
+    } catch (err) {
+      // A cancelled or failed export leaves nothing half-made behind.
+      try { fs.rmSync(dest, { recursive: true, force: true }); } catch {}
+      if (job.cancelled) return { cancelled: true };
+      throw err;
+    }
 
     // Optionally make the copies the project's sounds: their folder must be a library to be listed.
     if (mode === 'copy' && repoint && result.copies.length) {
@@ -405,6 +525,13 @@ function registerIpc() {
     return result;
   });
 
+  ipcMain.handle('proj:cancelExport', () => {
+    if (!exportJob || !exportJob.w) return false;
+    exportJob.cancelled = true;
+    exportJob.w.terminate();
+    return true;
+  });
+
   ipcMain.handle('type:set', (e, paths, type) => {
     for (const p of paths) { if (type) typeOverrides[p] = type; else delete typeOverrides[p]; }
     store.saveTypeOverrides(typeOverrides);
@@ -418,9 +545,30 @@ function registerIpc() {
     });
     if (r.canceled) return [];
     const added = [];
+    // Folders that hold huge numbers of non-sound files: scanning them takes very long.
+    const risky = norm => {
+      const trim = d => path.resolve(d).toLowerCase().replace(/[\\/]+$/, '');
+      const low = trim(norm);
+      const same = d => !!d && low === trim(d);
+      if (trim(path.parse(norm).root) === low) return 'a whole drive';
+      if (same(process.env.SystemRoot)) return 'the Windows folder';
+      if (same(process.env.ProgramFiles) || same(process.env['ProgramFiles(x86)'])) return 'the Program Files folder';
+      if (same(require('os').homedir())) return 'your whole user folder';
+      if (same(process.env.APPDATA) || same(process.env.LOCALAPPDATA)) return 'an app-data folder';
+      return '';
+    };
     for (const p of r.filePaths) {
       const norm = path.resolve(p);
       if (libraries.some(l => path.resolve(l.path).toLowerCase() === norm.toLowerCase())) continue;
+      const what = risky(norm);
+      if (what) {
+        const c = await dialog.showMessageBox(win, {
+          type: 'warning', buttons: ['Link anyway', 'Skip it'], defaultId: 1, cancelId: 1, title: 'Link this folder?',
+          message: `“${norm}” is ${what}.`,
+          detail: 'It holds a very large number of files that aren’t sounds, so scanning it can take a long time and keep the disk busy. Linking the folders where your sounds actually live is faster.',
+        });
+        if (c.response !== 0) continue;
+      }
       const lib = { id: crypto.randomBytes(6).toString('hex'), name: path.basename(norm) || norm, path: norm, count: 0, addedAt: Date.now() };
       libraries.push(lib);
       added.push(libPublic(lib));
@@ -496,8 +644,8 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('dupes:find', () => {
-    if (dupesWorker) dupesWorker.terminate();
+  // Every indexed sound with its quick comparison key (format + length).
+  const dupeFiles = () => {
     const files = [];
     for (const lib of libraries) {
       const base = lib.path.endsWith(path.sep) ? lib.path : lib.path + path.sep;
@@ -507,6 +655,20 @@ function registerIpc() {
         files.push({ path: base + r.rel.split('/').join(path.sep), size: r.size, key });
       }
     }
+    return files;
+  };
+  // The most the "same audio" search could read: files sharing format + length with another one.
+  ipcMain.handle('dupes:estimate', () => {
+    const files = dupeFiles(), count = new Map();
+    for (const f of files) count.set(f.key, (count.get(f.key) || 0) + 1);
+    const cands = files.filter(f => count.get(f.key) > 1);
+    return { files: cands.length, bytes: cands.reduce((t, f) => t + (f.size || 0), 0), confirmGB: safety().confirmGB };
+  });
+  ipcMain.handle('dupes:cancel', () => { if (!dupesWorker) return false; dupesWorker.terminate(); return true; });
+
+  ipcMain.handle('dupes:find', () => {
+    if (dupesWorker) dupesWorker.terminate();
+    const files = dupeFiles();
     return new Promise((resolve, reject) => {
       const w = new Worker(path.join(__dirname, 'lib', 'dupes-worker.js'), { workerData: { files } });
       dupesWorker = w;
@@ -523,17 +685,47 @@ function registerIpc() {
   // Moves files to the Recycle Bin after the user confirms. Returns the paths that were recycled.
   ipcMain.handle('file:trash', async (e, paths, detail) => {
     if (!paths.length) return [];
-    const names = paths.slice(0, 8).map(p => '  ' + path.basename(p)).join('\n') + (paths.length > 8 ? `\n  …and ${paths.length - 8} more` : '');
+    const s = safety();
+    const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
+    const names = list => list.slice(0, 8).map(p => '  ' + path.basename(p)).join('\n') + (list.length > 8 ? `\n  …and ${(list.length - 8).toLocaleString()} more` : '');
+    // Total size, and which files sit on drives without a Recycle Bin (network shares, USB sticks).
+    let bytes = 0, next = 0;
+    await Promise.all(Array.from({ length: 16 }, async () => {
+      while (next < paths.length) { const p = paths[next++]; try { bytes += (await fsp.stat(p)).size; } catch {} }
+    }));
+    const types = new Map();
+    for (const p of paths) { const r = rootOf(p).toUpperCase(); if (!types.has(r)) types.set(r, await driveType(p)); }
+    const noBin = paths.filter(p => ['network', 'removable'].includes(types.get(rootOf(p).toUpperCase())));
+    if (noBin.length) {
+      const where = [...new Set(noBin.map(driveName))].join(', ');
+      const why = `${where} ${noBin.length === paths.length ? 'is' : 'includes'} a network or removable drive. Windows has no Recycle Bin there, so these files would be deleted permanently and couldn't be restored.`;
+      if (s.networkDelete === 'refuse') {
+        await dialog.showMessageBox(win, { type: 'error', buttons: ['OK'], title: 'Can’t recycle these files', message: `${plural(noBin.length, 'file')} can’t go to the Recycle Bin.`, detail: `${why}\n\nSoundfield is set to refuse permanent deletes. Nothing was deleted.\n\n${names(noBin)}` });
+        return [];
+      }
+      const r = await dialog.showMessageBox(win, {
+        type: 'warning', buttons: ['Delete permanently', 'Cancel'], defaultId: 1, cancelId: 1, title: 'Permanent delete',
+        message: `${plural(noBin.length, 'file')} would be deleted permanently.`, detail: `${why}\n\n${names(noBin)}`,
+      });
+      if (r.response !== 0) return [];
+    }
     const r = await dialog.showMessageBox(win, {
       type: 'warning',
       buttons: ['Move to Recycle Bin', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
       title: 'Move to Recycle Bin',
-      message: `Move ${paths.length} file${paths.length === 1 ? '' : 's'} to the Recycle Bin?`,
-      detail: (detail ? detail + '\n\n' : '') + names,
+      message: `Move ${plural(paths.length, 'file')} (${fmtBytes(bytes)}) to the Recycle Bin?`,
+      detail: (detail ? detail + '\n\n' : '') + names(paths),
     });
     if (r.response !== 0) return [];
+    // Huge batches: the Recycle Bin has a size limit, and files that don't fit are deleted for good.
+    const big = await confirmBig(bytes, paths.length, {
+      message: `Really recycle ${plural(paths.length, 'file')} (${fmtBytes(bytes)})?`,
+      detail: 'That’s a very large amount. The Recycle Bin has a size limit (a share of each drive), and Windows may delete files that don’t fit permanently instead of keeping them.\n\nIf you want to be able to restore them, recycle fewer at a time.',
+      ok: 'Yes, recycle them',
+    });
+    if (!big) return [];
     for (const p of paths) { const h = handles.get(p); if (h && !h.users) { clearTimeout(h.timer); closeHandle(p, h); } }
     const done = [];
     let last = 0;
@@ -562,10 +754,28 @@ function registerIpc() {
     return done;
   });
 
+  // Resolves { dest, skipped } or null when the person cancelled / it can't fit.
   ipcMain.handle('zip:extract', async (e, p, mode, libId) => {
-    const dest = await extractZip(p, mode);
+    const dest = extractDest(p, mode);
+    const z = await zipListing(p);
+    if (!z) throw new Error('This zip can’t be read');
+    // Same-named files already there are kept, never overwritten.
+    const skipped = z.files.filter(f => fs.existsSync(path.join(dest, ...f.name.split('/'))));
+    const bytes = z.total - skipped.reduce((t, f) => t + Math.max(0, f.size), 0);
+    if (!(await ensureSpace(dest, bytes, `the ${z.files.length.toLocaleString()} files in this zip (${fmtBytes(bytes)})`))) return null;
+    // Contents far bigger than the zip itself can be a "zip bomb" made to fill a drive.
+    const bomb = z.total > GB && z.total > z.zipSize * 20;
+    const go = await confirmBig(bytes, z.files.length, {
+      force: bomb,
+      message: `Extract ${z.files.length.toLocaleString()} files (${fmtBytes(bytes)})?`,
+      detail: (bomb ? `This ${fmtBytes(z.zipSize)} zip unpacks to ${fmtBytes(z.total)}, ${Math.round(z.total / z.zipSize)}× its own size. That's unusual for audio and can be a zip made to fill up a drive. Only continue if you trust where it came from.\n\n` : '')
+        + `Into ${dest}${skipped.length ? `\n\n${skipped.length.toLocaleString()} file(s) with the same name are already there; they'll be kept, not overwritten.` : ''}`,
+      ok: 'Extract',
+    });
+    if (!go) return null;
+    await extractZip(p, mode);
     if (libId) queueScan(libId);
-    return dest;
+    return { dest, skipped: skipped.length };
   });
 
   // Native context menu: items = [{ id, label } | { type: 'separator' }]; resolves the clicked id or null.
@@ -595,7 +805,7 @@ function registerIpc() {
   ipcMain.handle('app:openDataDir', () => shell.openPath(app.getPath('userData')));
 
   ipcMain.on('drag:start', async (e, p, region) => {
-    if (Array.isArray(p)) { // several selected sounds
+    if (Array.isArray(p)) { // several selected sounds (the renderer checks the count / size limits first)
       const files = p.filter(f => typeof f === 'string' && fs.existsSync(f));
       if (files.length) { try { e.sender.startDrag({ file: files[0], files, icon: getDragIcon() }); } catch (err) { console.error('startDrag', err); } }
       return;
@@ -604,7 +814,14 @@ function registerIpc() {
     if (region) {
       try {
         const info = probeCache.get(p) || await probeCached(p);
-        if (info) file = writeRegionSync(p, info, region.start, region.end, regionDir());
+        if (info) {
+          // A selection becomes a new WAV in Documents\Soundfield Regions: check its size first.
+          const bytes = Math.max(0, Math.ceil(region.end) - Math.floor(region.start)) * info.blockAlign;
+          const s = safety(), free = freeSpace(regionDir());
+          if (bytes > s.dragGB * GB) { send('app:toast', `That selection would be a ${fmtBytes(bytes)} file, over the ${s.dragGB} GB drag limit. Select less, or drag the whole file.`); return; }
+          if (free != null && bytes + SPACE_MARGIN > free) { send('app:toast', `Not enough free space on ${driveName(regionDir())} for a ${fmtBytes(bytes)} selection.`); return; }
+          file = writeRegionSync(p, info, region.start, region.end, regionDir());
+        }
       } catch (err) {
         console.error('region export failed', err);
       }
@@ -792,6 +1009,7 @@ function registerOnlineIpc() {
     }
     if (!/^https:\/\//.test(url || '')) throw new Error('This sound has no downloadable file');
     ext = ext === 'aiff' ? 'aif' : ext.replace(/[^a-z0-9]/gi, '').slice(0, 5);
+    if (r.size && quality === 'original' && !(await ensureSpace(dir, r.size, `“${r.title}” (${fmtBytes(r.size)})`))) return { cancelled: true };
     const base = online.safeName(r.title) + (quality === 'preview' ? ' (preview)' : '');
     const dest = online.uniquePath(dir, base, ext);
     send('online:progress', { key: r.key, got: 0, total: r.size || 0 });

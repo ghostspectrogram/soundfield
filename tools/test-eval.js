@@ -117,6 +117,72 @@
   const door = byRel('Doors/Door Slam Wood 01.wav');
   check('Category from name', door && door.type !== 'unsorted', door && door.type);
 
+  // ---------------------------------------------------------------- safety (dialogs answered by the test)
+  const D = window.api.testDialogs;
+  const boxes = log => log.filter(d => d.kind === 'box');
+  const has = (log, re) => boxes(log).some(d => re.test(d.message + ' ' + d.detail));
+  const three = S.items.filter(it => !it.zip).slice(0, 3);
+  const expItems = three.map(it => ({ path: it.path, rel: `${it.lib.name}/${it.rec.rel}`, size: it.rec.size }));
+  const sp = { id: 'sizeproj', name: 'Size project', created: Date.now(), items: [] };
+  S.projects.push(sp);
+  sf.addToProject(sp, three, true);
+  sf.openProject(sp);
+  const want = three.reduce((t, it) => t + it.rec.size, 0);
+  const banner = document.querySelector('#proj-banner').textContent;
+  check('Project shows its materialized size', /\d[\d.]* (KB|MB|GB)/.test(banner), banner.replace(/\s+/g, ' ').slice(0, 90));
+  S.projects = S.projects.filter(x => x !== sp); sf.saveProjects();
+  S.scope = { type: 'all' }; sf.applyFilters();
+
+  await D({ open: CFG.exportDir, box: [] });
+  let r = await window.api.exportProject({ mode: 'copy', name: 'Test export', items: expItems, layout: 'flat', manifest: true });
+  check('Materialize copies a project', r && r.count === 3, r ? `${r.count} copied, ${r.bytes} bytes of ${want}` : 'nothing');
+
+  await D({ open: CFG.exportDir, box: [] });
+  r = await window.api.exportProject({ mode: 'copy', name: 'Too big', items: expItems.map(x => ({ ...x, size: 1e15 })), layout: 'flat', manifest: true });
+  let log = await D(null);
+  check('Materialize refuses when the drive is too small', r === null && has(log, /isn't enough free space/), r === null ? 'refused' : 'went ahead');
+  check('Nothing left behind after a refused copy', !(await window.api.exists(CFG.exportDir + '\\Too big')));
+
+  await D({ open: CFG.libDir, box: [] });
+  r = await window.api.exportProject({ mode: 'copy', name: 'Inside lib', items: expItems, layout: 'flat', manifest: true });
+  log = await D(null);
+  check('Warns before materializing inside a library', r === null && has(log, /inside your library/), r === null ? 'stopped at the warning' : 'went ahead');
+
+  sf.prefs.safety = { confirmFiles: 2 }; sf.savePrefs(); await wait(100);
+  await D({ open: CFG.exportDir, box: [] });
+  r = await window.api.exportProject({ mode: 'copy', name: 'Big job', items: expItems, layout: 'flat', manifest: true });
+  log = await D(null);
+  check('Big jobs ask a second time', r === null && boxes(log).some(d => d.title === 'Large job' && /3 sounds/.test(d.message)), boxes(log).map(d => d.title).join(', '));
+  delete sf.prefs.safety; sf.savePrefs(); await wait(100);
+
+  await D({ box: [] });
+  const doorPath = door.path;
+  const gone = await window.api.trash([doorPath], '');
+  log = await D(null);
+  check('Recycle shows the size and cancelling keeps the file', gone.length === 0 && has(log, /\(\d[\d.]* (B|KB|MB)\)/) && await window.api.exists(doorPath), boxes(log).map(d => d.message).join(' | '));
+
+  const zipIt = S.items.find(it => it.zip);
+  const z1 = await window.api.extractZip(zipIt.path, 'here', zipIt.lib.id);
+  const z2 = await window.api.extractZip(zipIt.path, 'here', zipIt.lib.id);
+  check('Extract never overwrites existing files', z1 && z1.skipped === 0 && z2 && z2.skipped === 1, `first skipped ${z1 && z1.skipped}, second skipped ${z2 && z2.skipped}`);
+
+  const est = await window.api.dupesEstimate();
+  check('Duplicate search estimates what it will read', est.files === 2 && est.bytes === 2 * door.rec.size, `${est.files} files, ${est.bytes} bytes`);
+
+  // A "preview" that is really a multi-GB original asks first (nothing is downloaded here: it's cancelled).
+  const huge = { key: 'test:huge', source: 'archive', sourceLabel: 'Test', title: 'Huge field recording', previewIsOriginal: true, size: 3e9, previewSize: 3e9, previewUrl: 'https://example.invalid/huge.wav', previewExt: 'wav', ext: 'wav', license: 'cc0', duration: 3600 };
+  const pending = sf.loadOnline(huge, { play: false });
+  await until(() => !document.querySelector('#modal').hidden, 3000);
+  const q = document.querySelector('#modal').textContent;
+  document.querySelector('#modal [data-a=cancel]')?.click();
+  await pending;
+  check('Asks before downloading a huge preview', /2\.8 GB/.test(q) && sf.wave.message.includes('not downloaded'), q.slice(0, 60));
+
+  await D({ open: CFG.driveRoot, box: [] });
+  const added = await window.api.addLibraries();
+  log = await D({ open: null });
+  check('Warns before linking a whole drive', added.length === 0 && has(log, /a whole drive/), added.length ? 'linked it' : 'skipped');
+
   // A preference to look for after the restart
   sf.prefs.testMarker = CFG.marker;
   sf.savePrefs();

@@ -47,7 +47,7 @@ const LIC_TIPS = {
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 export function createOnline(ctx) {
-  const { api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, ipcMessage, loadOnline, saveOnline, LIC_INFO } = ctx;
+  const { api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, fmtBytes, ipcMessage, loadOnline, saveOnline, LIC_INFO, previewBytes } = ctx;
   const $ = s => document.querySelector(s);
   const O = { query: '', page: 1, results: [], view: [], seen: new Set(), more: {}, errors: {}, totals: {}, via: '', loading: false, tok: 0, progress: new Map(), sort: null, settings: null };
 
@@ -289,6 +289,7 @@ export function createOnline(ctx) {
     if (r.ext) bits.push(r.ext.toUpperCase());
     if (r.ch) bits.push(r.ch === 1 ? 'mono' : r.ch === 2 ? 'stereo' : `${r.ch} ch`);
     if (r.sr) bits.push(`${(r.sr / 1000).toFixed(r.sr % 1000 ? 1 : 0)}k`);
+    if (r.size) bits.push(fmtBytes(r.size));
     return bits.join(' · ');
   }
 
@@ -342,7 +343,8 @@ export function createOnline(ctx) {
   function prefetch(rs) {
     clearTimeout(prefetchTimer);
     prefetchTimer = setTimeout(() => {
-      for (const r of rs) if (r && !r.isMore && !S.downloads[r.key]) api.online.preview(r).catch(() => {});
+      // Only small previews: a big original is downloaded only when you ask to listen to it.
+      for (const r of rs) if (r && !r.isMore && !S.downloads[r.key] && previewBytes(r) <= 50 * 1024 * 1024) api.online.preview(r).catch(() => {});
     }, 400); // let the sound you clicked start first
   }
 

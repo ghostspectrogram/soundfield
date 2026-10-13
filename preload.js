@@ -1,7 +1,7 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const EVENTS = new Set(['scan:progress', 'lib:updated', 'lib:status', 'peaks:progress', 'dupes:progress', 'analysis:update', 'trash:progress', 'export:progress', 'online:progress', 'preview:progress']);
+const EVENTS = new Set(['scan:progress', 'lib:updated', 'lib:status', 'peaks:progress', 'dupes:progress', 'analysis:update', 'trash:progress', 'export:progress', 'online:progress', 'preview:progress', 'app:toast']);
 
 contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('state:get'),
@@ -19,10 +19,13 @@ contextBridge.exposeInMainWorld('api', {
   showExport: (p, isFile) => ipcRenderer.invoke('file:showExport', p, isFile),
   saveProjects: list => ipcRenderer.invoke('proj:save', list),
   exportProject: req => ipcRenderer.invoke('proj:export', req),
+  cancelExport: () => ipcRenderer.invoke('proj:cancelExport'),
   // Real path of a file dropped onto the window (sounds dragged from the list or from Explorer).
   pathForFile: file => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   setType:(paths, type) => ipcRenderer.invoke('type:set', paths, type || null),
   findDupes:() => ipcRenderer.invoke('dupes:find'),
+  dupesEstimate: () => ipcRenderer.invoke('dupes:estimate'),
+  cancelDupes: () => ipcRenderer.invoke('dupes:cancel'),
   trash: (paths, detail) => ipcRenderer.invoke('file:trash', paths, detail || ''),
   extractZip:(p, mode, libId) => ipcRenderer.invoke('zip:extract', p, mode, libId),
   menu: items => ipcRenderer.invoke('menu:popup', items),
@@ -52,6 +55,8 @@ contextBridge.exposeInMainWorld('api', {
     save: prefs => ipcRenderer.send('settings:save', prefs),
   },
   appInfo: () => ipcRenderer.invoke('app:info'),
+  // Only answers during test runs (tools/test.js): scripted dialog answers + a log of dialogs shown.
+  testDialogs: patch => ipcRenderer.invoke('test:dialogs', patch || null),
   openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
   openExternal: url => ipcRenderer.invoke('open:external', url),
   exists: p => ipcRenderer.invoke('file:exists', p),

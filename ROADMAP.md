@@ -35,7 +35,8 @@ The phases are merged to GitHub together once you're happy.
 5. **Listening:** tape-style varispeed, loudness measurement with matched-loudness preview, the spectrogram view.
 6. **Your sounds:**
    - The per-sound store, with notes, star ratings, markers and recently played.
-   - Search support for them, e.g. `rating:4+`.
+   - Smarter search: synonyms and typo tolerance.
+   - Search support for the new fields, e.g. `rating:4+`.
 7. **Backups:** automatic plus manual backup / restore, with old backups deleted automatically.
 
 ## Also in this update
@@ -93,6 +94,7 @@ Anything that copies, moves, deletes or downloads a lot must say how big it is b
 ### Finding sounds
 - **Find similar sounds:** list the library sounds closest to the one you're on. It reuses the audio features the category sorting already measures.
 - **Your own notes per sound:** stored by Soundfield (your audio files are never changed) and searchable like file names and descriptions.
+- **Smarter search with synonyms:** searching "gun" also finds rifle, pistol, shot, gunshot; "car" finds vehicle, auto, sedan. A built-in sound-design synonym list that you can extend, plus tolerance for small typos ("explsion"). Exact matches are listed first, synonym matches after, and quotes (`"gun"`) turn synonyms off for that word.
 - **Star ratings (1–5)** alongside Favorites, with a filter such as "4 stars and up".
 - **Recently played:** a sidebar list of the last ~100 sounds auditioned.
 
@@ -154,7 +156,6 @@ Source to adapt: `C:\Dev\SpectralEditor\Source`. `SpectrogramData.cpp` does the 
 ## Ideas not taken (for now)
 - Reverse preview
 - Drag options (fades, normalize, mono fold-down, format conversion on drag)
-- Smarter search (synonyms, typo tolerance)
 
 ## Settings panel
 Every setting below goes in. Layout rules:

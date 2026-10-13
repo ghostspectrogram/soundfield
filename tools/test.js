@@ -43,6 +43,30 @@ function report(title, out) {
   return out.results.filter(r => !r.ok).length;
 }
 
+// Checks of lib/ helpers that run in Node directly (no window needed).
+async function unitTests(lib) {
+  const results = [];
+  const check = (name, ok, detail = '') => results.push({ name, ok: !!ok, detail: String(detail) });
+  const { probe } = require('../lib/probe');
+  const { writeRegionSync } = require('../lib/region');
+  const { zipListing } = require('../lib/zip');
+  const out = path.join(tmp, 'regions');
+  const long = path.join(lib, 'Long Room Tone.wav');
+  const info = await probe(long);
+  const f = writeRegionSync(long, info, 48000 * 10, 48000 * 70, out); // 60 s, written in pieces
+  const got = await probe(f);
+  check('Region export of a long selection', got && got.frames === 48000 * 60 && got.ch === 1 && fs.statSync(f).size === 44 + 48000 * 60 * 2, got ? `${got.frames} frames, ${fs.statSync(f).size} bytes` : 'unreadable');
+  const aif = path.join(lib, 'UI', 'Click Tick.aif');
+  const ai = await probe(aif);
+  const f2 = writeRegionSync(aif, ai, 0, ai.frames, out);
+  const a2 = await probe(f2);
+  check('Region export converts AIFF to WAV', a2 && a2.frames === ai.frames && a2.codec === 'pcm' && !a2.be, a2 ? `${a2.frames} frames` : 'unreadable');
+  const z = await zipListing(path.join(lib, 'Packs', 'Small Pack.zip'));
+  check('Zip listing', z && z.files.length === 1 && z.total > 0 && z.zipSize > 0, z ? `${z.files.length} file, ${z.total} bytes` : 'unreadable');
+  return { results };
+}
+
+(async () => {
 let failed = 0;
 try {
   if (args.includes('--perf')) {
@@ -74,12 +98,15 @@ try {
     // 1. An older Soundfield kept preferences in browser storage: put some there, then remove settings.json.
     run(`(async () => { localStorage.setItem('sf.prefs', JSON.stringify({ migratedProbe: 'from-localStorage', volume: -12 })); await new Promise(r => setTimeout(r, 300)); return { results: [], metrics: {} }; })()`, { SF_NO_SCAN: '1' });
     fs.rmSync(path.join(userData, 'settings.json'), { force: true });
-    // 2. First start of this version.
-    const first = run(withCfg({ mode: 'first', version: pkg.version, count, fixtures, marker }));
+    // 2. First start of this version. Dialogs are answered by the test (SF_TEST).
+    const exportDir = path.join(tmp, 'exports');
+    fs.mkdirSync(exportDir);
+    const first = run(withCfg({ mode: 'first', version: pkg.version, count, fixtures, marker, exportDir, libDir: lib, driveRoot: path.parse(tmp).root }), { SF_TEST: '1' });
     failed += report('First start', first);
-    // 3. Restart: preferences and the index must still be there.
-    const again = run(withCfg({ mode: 'restart', count, marker }), { SF_NO_SCAN: '1' });
+    // 3. Restart: preferences and the index must still be there (plus the sound extracted from the zip).
+    const again = run(withCfg({ mode: 'restart', count: count + 1, marker }), { SF_NO_SCAN: '1' });
     failed += report('Restart', again);
+    failed += report('File helpers', await unitTests(lib));
     console.log(`\n  boot ${first.metrics.bootMs} ms · filter ${first.metrics.filterAllMs} ms · heap ${first.metrics.heapMB} MB`);
   }
 } catch (e) {
@@ -91,3 +118,4 @@ try {
 }
 console.log(failed ? `\n${failed} problem(s).` : '\nAll good.');
 process.exit(failed ? 1 : 0);
+})();

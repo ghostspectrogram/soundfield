@@ -1,0 +1,9 @@
+{
+  "confirmGB": 10,
+  "confirmFiles": 5000,
+  "dragFiles": 200,
+  "dragGB": 5,
+  "previewMB": 200,
+  "saveMB": 500,
+  "networkDelete": "ask"
+}

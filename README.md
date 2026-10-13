@@ -27,7 +27,8 @@ Each build records its version, build time and commit; click the **Soundfield** 
   - exact peak levels;
   - playback while switching sounds quickly;
   - projects and duplicates;
-  - that preferences survive a restart.
+  - that preferences survive a restart;
+  - the safety checks, with Windows dialogs answered by the test script.
 - `npm test -- --perf` times startup, filtering, search and project views on a *copy* of your real library index; no audio is read. Add `--save-baseline` to remember the result, and later runs flag anything more than 25% slower. The baseline is per machine and not committed.
 - Neither touches your own data.
 
@@ -86,6 +87,22 @@ import { Engine } from 'soundfield/engine';
 
 ## License
 No license has been granted: all rights reserved. You're welcome to read the code; reuse requires permission from the author.
+
+## Safety
+Anything that copies, deletes or downloads a lot says how big it is before it starts.
+
+**Free space and limits**
+- Materialize, Zip, Extract, region drags and online saves check the destination drive's free space, keeping 2 GB spare. If a job won't fit, it's refused, with the amount you'd need to free up.
+- Above 10 GB or 5,000 files, a second confirmation is asked. These limits live in `shared/safety.json` and become adjustable in Settings.
+- Materialize / Zip can be cancelled from the status bar while they run. A cancelled or failed one removes its half-finished folder or zip.
+
+**Specific protections**
+- Materializing into one of your own libraries warns first, because the copies would be indexed as duplicates.
+- Recycling shows the total size. Network and USB drives have no Recycle Bin, so deleting there is permanent: Soundfield says so in a separate warning. Very large batches ask twice, because Windows may permanently delete files that don't fit in the Recycle Bin.
+- Extracting a zip never overwrites existing files. A zip that unpacks to more than 20× its own size (and over 1 GB) gets a warning.
+- Dragging more than 200 files or 5 GB into a DAW is refused with a hint to use Materialize instead. Selections are written to disk in pieces, never loaded whole.
+- Online results show their size. Saves over 500 MB, and previews over 200 MB (some Internet Archive "previews" are the full original), ask first. Big previews are never downloaded in the background.
+- Linking a whole drive, the Windows folder, Program Files, an app-data folder or your user folder asks first. The "same audio" duplicate search says how much it may read from disk, and can be cancelled.
 
 ## Libraries
 - Click **+** next to *Libraries* to link a folder. Files are never copied or moved; only audio files are indexed (WAV/BWF/RF64, AIFF/AIFC, FLAC, MP3, OGG/Opus, M4A).

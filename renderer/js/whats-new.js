@@ -2,6 +2,20 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.2',
+    date: '2026-10-13',
+    items: [
+      'Projects show how much disk space they’d take if materialized (in the project bar and the sidebar tooltip).',
+      'Materialize and Zip say how big they are, check the free space on the drive you pick, and stop if it won’t fit. Very large ones ask twice, can be cancelled while they run, and a cancelled one is cleaned up.',
+      'Materializing into one of your own libraries now warns you first, because every copy would show up as a duplicate.',
+      'Recycling shows the total size. Files on a network or USB drive (no Recycle Bin there, so deletes are permanent) get their own warning, and very large batches ask twice.',
+      '“Extract here” never overwrites files that are already there, and checks the free space first. A zip that unpacks to far more than its own size gets a warning.',
+      'Dragging hundreds of files (or many GB) into a DAW is stopped with a hint to use Materialize instead. Dragging out a long selection no longer loads it all into memory.',
+      'Online: results show their file size, and huge saves or previews (some Internet Archive recordings are several GB) ask before downloading.',
+      'Linking a whole drive, the Windows folder or your user folder as a library asks first. The “same audio” duplicate search says how much it may read, and can be cancelled.',
+    ],
+  },
+  {
     version: '0.2.0-beta.1',
     date: '2026-10-13',
     items: [

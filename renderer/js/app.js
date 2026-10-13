@@ -7,6 +7,7 @@ import { createSource } from './sources.js';
 import { detectLayout, layoutChoices } from './layouts.js';
 import { metaCategory, TYPES, TYPE_LABELS } from '../../shared/categorize.mjs';
 import { RELEASES, unseenReleases } from './whats-new.js';
+import SAFETY_DEFAULTS from '../../shared/safety.json' with { type: 'json' };
 
 const $ = s => document.querySelector(s);
 const api = window.api;
@@ -23,6 +24,9 @@ const prefs = Object.assign(
 function savePrefs() { try { window.api.settings.save(prefs); } catch {} }
 function safeJson(fn) { try { return JSON.parse(fn()) || {}; } catch { return {}; } }
 if (!savedPrefs) savePrefs();
+// Size / count limits before big jobs need a second confirmation (shared/safety.json + your changes).
+const safety = () => ({ ...SAFETY_DEFAULTS, ...(prefs.safety || {}) });
+const GB = 1024 ** 3, MB = 1024 ** 2;
 
 // ------------------------------------------------------------------ state
 const S = {
@@ -577,10 +581,11 @@ function showZip(it) {
 async function extract(it, mode) {
   toast(`Extracting ${it.name}…`, 60000);
   try {
-    const dest = await api.extractZip(it.path, mode, it.lib.id);
-    toast(`Extracted to ${dest}. Adding the new sounds…`);
+    const r = await api.extractZip(it.path, mode, it.lib.id);
+    if (!r) { toast('Extract cancelled'); return; }
+    toast(`Extracted to ${r.dest}. Adding the new sounds…${r.skipped ? ` ${r.skipped.toLocaleString()} file(s) already there were kept, not overwritten.` : ''}`, r.skipped ? 6000 : 2600);
   } catch (err) {
-    toast(`Couldn’t extract: ${err.message || err}`, 6000);
+    toast(`Couldn’t extract: ${ipcMessage(err)}`, 6000);
   }
 }
 
@@ -869,8 +874,17 @@ listEl.addEventListener('dragstart', e => {
   const i = list.indexFromEvent(e);
   e.preventDefault();
   if (i < 0) return;
-  // Dragging one of several selected sounds drags all of them.
-  if (S.multi.size > 1 && S.multi.has(S.view[i].path)) { api.startDrag(selectedItems().filter(x => !x.zip).map(x => x.path), null); return; }
+  // Dragging one of several selected sounds drags all of them (within the drag limits: a DAW
+  // can freeze, or copy a huge amount, when hundreds of files land on it at once).
+  if (S.multi.size > 1 && S.multi.has(S.view[i].path)) {
+    const files = selectedItems().filter(x => !x.zip), bytes = sumBytes(files), s = safety();
+    if (files.length > s.dragFiles || bytes > s.dragGB * GB) {
+      toast(`That's ${files.length.toLocaleString()} files (${fmtBytes(bytes)}), over the drag limit of ${s.dragFiles} files / ${s.dragGB} GB. Add them to a project and use Materialize instead.`, 6000);
+      return;
+    }
+    api.startDrag(files.map(x => x.path), null);
+    return;
+  }
   if (!S.view[i].zip && !S.view[i].isFolder && !S.view[i].isMissing) api.startDrag(S.view[i].path, null);
 });
 listEl.addEventListener('contextmenu', async e => {
@@ -1013,6 +1027,16 @@ async function findDupes(mode) {
     return;
   }
   if (S.dupProgress) return;
+  // Comparing audio reads files from disk: say how much first when it's a lot.
+  const est = await api.dupesEstimate().catch(() => null);
+  if (est && est.bytes > est.confirmGB * GB) {
+    const ok = await modal({
+      title: 'Compare audio across your libraries?',
+      sub: `${est.files.toLocaleString()} sounds share a format and length with another one, so their audio has to be compared. That can mean reading up to <b>${fmtBytes(est.bytes)}</b> from disk, which takes a while on large or network drives. You can cancel while it runs.`,
+      ok: 'Compare them',
+    });
+    if (!ok) { S.dupChooser = true; applyFilters(); return; }
+  }
   S.dupes = null;
   S.dupesRaw = null;
   S.dupProgress ={ stage: 'Looking for duplicates', done: 0, total: 0 };
@@ -1644,7 +1668,7 @@ $('#types').addEventListener('contextmenu', async e => {
     return sub;
   };
   const menu = [
-    { id: '', label: `${label}: ${items.length.toLocaleString()} sound${items.length === 1 ? '' : 's'}`, enabled: false },
+    { id: '', label: `${label}: ${items.length.toLocaleString()} sound${items.length === 1 ? '' : 's'} · ${fmtBytes(sumBytes(items))}`, enabled: false },
     { type: 'separator' },
     { label: `Add all ${items.length.toLocaleString()} to project`, submenu: projSub('all:') },
   ];
@@ -1657,8 +1681,13 @@ $('#types').addEventListener('contextmenu', async e => {
   const [which, id] = pick.split(':');
   const chosen = which === 'listed' ? listed : items;
   if (!chosen.length) return;
-  if (chosen.length > 2000) {
-    const ok = await modal({ title: `Add ${chosen.length.toLocaleString()} sounds?`, sub: `That's every sound in “${escapeHtml(label)}”. Nothing is moved or copied: the project just lists them.`, ok: 'Add them' });
+  const bytes = sumBytes(chosen);
+  if (chosen.length > 2000 || bytes > safety().confirmGB * GB) {
+    const ok = await modal({
+      title: `Add ${chosen.length.toLocaleString()} sounds (${fmtBytes(bytes)})?`,
+      sub: `That's ${which === 'listed' ? 'every listed sound' : 'every sound'} in “${escapeHtml(label)}”. Nothing is moved or copied: the project just lists them. Materializing the project later would copy <b>${fmtBytes(bytes)}</b>.`,
+      ok: 'Add them',
+    });
     if (!ok) return;
   }
   if (id === 'new') newProject(chosen);
@@ -1736,7 +1765,7 @@ function renderScanStatus() {
   if (S.exportProgress) {
     const x = S.exportProgress;
     const pct = x.totalBytes ? (x.bytes / x.totalBytes) * 100 : x.total ? (x.done / x.total) * 100 : 0;
-    el.innerHTML = `${x.mode === 'zip' ? 'Zipping' : 'Materializing'} “${escapeHtml(x.name)}”: ${x.done.toLocaleString()} / ${x.total.toLocaleString()}<div class="bar"><i style="width:${pct}%"></i></div>`;
+    el.innerHTML = `${x.mode === 'zip' ? 'Zipping' : 'Materializing'} “${escapeHtml(x.name)}”: ${x.done.toLocaleString()} / ${x.total.toLocaleString()}${x.totalBytes ? ` · ${fmtBytes(x.bytes)} of ${fmtBytes(x.totalBytes)}` : ''}<button class="st-cancel" data-cancel="export">Cancel</button><div class="bar"><i style="width:${pct}%"></i></div>`;
     return;
   }
   if (S.trashProgress) {
@@ -1753,7 +1782,7 @@ function renderScanStatus() {
   if (!first && S.dupProgress) {
     const d = S.dupProgress;
     const pct = d.total ? (d.done / d.total) * 100 : 5;
-    el.innerHTML = `${escapeHtml(d.stage)}…<div class="bar"><i style="width:${pct}%"></i></div>`;
+    el.innerHTML = `${escapeHtml(d.stage)}…<button class="st-cancel" data-cancel="dupes">Cancel</button><div class="bar"><i style="width:${pct}%"></i></div>`;
     return;
   }
   if (!first) { el.innerHTML = ''; return; }
@@ -1768,6 +1797,14 @@ function renderScanStatus() {
     el.innerHTML = `Checking ${name}…`;
   }
 }
+
+$('#scan-status').addEventListener('click', async e => {
+  const b = e.target.closest('[data-cancel]');
+  if (!b) return;
+  b.disabled = true;
+  if (b.dataset.cancel === 'export') api.cancelExport();
+  else if (b.dataset.cancel === 'dupes' && await api.cancelDupes()) toast('Duplicate search cancelled');
+});
 
 // ------------------------------------------------------------------ keyboard
 document.addEventListener('keydown', e => {
@@ -1936,6 +1973,15 @@ function itemsByPath() {
   }
   return byPathCache.map;
 }
+// Total size of a project's sounds (what a Materialize would copy); missing files count their last known size.
+function projectBytes(p) {
+  const byPath = itemsByPath();
+  let bytes = 0, present = 0;
+  for (const r of p.items) { const it = byPath.get(lowPath(r.path)); if (it) { bytes += it.rec.size || 0; present++; } }
+  return { bytes, present };
+}
+const sumBytes = items => items.reduce((t, it) => t + ((it.rec && it.rec.size) || 0), 0);
+
 // The project's sounds that are in a linked library.
 function projectItems(p) {
   if (!p) return [];
@@ -1981,7 +2027,7 @@ function renderProjects() {
     const row = document.createElement('div');
     row.className = 'proj-row' + (S.scope.type === 'proj' && S.scope.id === p.id ? ' active' : '');
     row.dataset.id = p.id;
-    row.title = `${p.name}: ${p.items.length} sound${p.items.length === 1 ? '' : 's'}${miss ? `, ${miss} missing` : ''}. Drop sounds here to add them.`;
+    row.title = `${p.name}: ${p.items.length} sound${p.items.length === 1 ? '' : 's'} · ${fmtBytes(projectBytes(p).bytes)} if materialized${miss ? ` · ${miss} missing` : ''}. Drop sounds here to add them.`;
     row.innerHTML = `<span class="pico"></span><span class="lbl">${escapeHtml(p.name)}</span>${miss ? `<span class="miss">${miss} missing</span>` : ''}<span class="num">${p.items.length ? p.items.length.toLocaleString() : ''}</span>`;
     box.appendChild(row);
   }
@@ -2121,11 +2167,13 @@ async function exportProject(p, mode) {
   const miss = p.items.length - present;
   if (!p.items.length) { toast(`“${p.name}” is empty. Add some sounds first.`); return; }
   const zip = mode === 'zip';
+  const size = fmtBytes(projectBytes(p).bytes);
   const card = await modal({
     title: zip ? `Zip “${p.name}”` : `Materialize “${p.name}”`,
     sub: (zip
-      ? `Packs ${present.toLocaleString()} sound${present === 1 ? '' : 's'} into one .zip file. Your original files stay where they are.`
-      : `Copies ${present.toLocaleString()} sound${present === 1 ? '' : 's'} into a new folder called “${escapeHtml(p.name)}”. Your original files are never moved or deleted.`)
+      ? `Packs ${present.toLocaleString()} sound${present === 1 ? '' : 's'} (<b>${size}</b>) into one .zip file. Your original files stay where they are.`
+      : `Copies ${present.toLocaleString()} sound${present === 1 ? '' : 's'} (<b>${size}</b>) into a new folder called “${escapeHtml(p.name)}”. Your original files are never moved or deleted.`)
+      + ` The free space on the drive you pick is checked first.`
       + (miss ? ` <span style="color:var(--warn)">${miss} missing file${miss === 1 ? '' : 's'} will be skipped and listed at the end.</span>` : ''),
     body: `<fieldset><legend>Folder layout</legend>
         <label><input type="radio" name="layout" value="flat" ${prefs.exportLayout !== 'keep' ? 'checked' : ''}><span>All in one folder<small>Same-named files become “name (2).wav” instead of overwriting.</small></span></label>
@@ -2145,7 +2193,7 @@ async function exportProject(p, mode) {
   savePrefs();
   const items = p.items.map(r => {
     const it = byPath.get(lowPath(r.path));
-    return { path: r.path, rel: it ? `${it.lib.name}/${it.rec.rel}` : r.path.split(/[\\/]/).pop() };
+    return { path: r.path, rel: it ? `${it.lib.name}/${it.rec.rel}` : r.path.split(/[\\/]/).pop(), size: it ? it.rec.size || 0 : 0 };
   });
   let result;
   try {
@@ -2154,7 +2202,8 @@ async function exportProject(p, mode) {
     toast(`${zip ? 'Zip' : 'Materialize'} failed: ${err.message || err}`, 6000);
     return;
   }
-  if (!result) return; // cancelled
+  if (!result) return; // cancelled before it started
+  if (result.cancelled) { toast(`${zip ? 'Zip' : 'Materialize'} cancelled. The half-finished ${zip ? 'zip' : 'folder'} was removed.`, 4500); return; }
   // Remember where it went, so the project's menu can show it in Explorer later.
   p.exports = [{ mode: zip ? 'zip' : 'copy', dest: result.dest, at: Date.now(), count: result.count },
     ...(p.exports || []).filter(x => lowPath(x.dest) !== lowPath(result.dest))].slice(0, 12);
@@ -2223,7 +2272,8 @@ function renderProjBanner() {
   // A search or filter still applies inside a project: say how many of its sounds it hides.
   const listed = S.view.filter(it => !it.isMissing && !it.isFolder).length;
   const hidden = Math.max(0, p.items.length - miss - listed);
-  b.innerHTML = `<span>Project <b>${escapeHtml(p.name)}</b> · ${p.items.length.toLocaleString()} sound${p.items.length === 1 ? '' : 's'}${miss ? ` · <span class="warn">${miss} missing</span>` : ''}${hidden ? ` · <span class="warn">${hidden.toLocaleString()} hidden by ${activeFilters().join(', ')}</span>` : ''}</span>
+  const size = projectBytes(p).bytes;
+  b.innerHTML = `<span>Project <b>${escapeHtml(p.name)}</b> · ${p.items.length.toLocaleString()} sound${p.items.length === 1 ? '' : 's'} · <b title="How much disk space a Materialize (or Zip) of this project would take">${fmtBytes(size)}</b>${miss ? ` · <span class="warn">${miss} missing</span>` : ''}${hidden ? ` · <span class="warn">${hidden.toLocaleString()} hidden by ${activeFilters().join(', ')}</span>` : ''}</span>
     ${hidden ? '<button data-a="clearf" title="Clear the search and every filter so the whole project is listed">Show all</button>' : ''}
     <span class="grow">${p.items.length ? '' : 'This project is empty. Right-click sounds → <i>Add to project</i>, right-click a category → <i>Add all to project</i>, drag sounds onto the project, or press <b>P</b> while previewing.'}</span>
     ${miss ? '<button data-a="relink" title="Find moved or renamed files again by name and size">Relink missing</button>' : ''}
@@ -2355,6 +2405,9 @@ api.on('export:progress', p => {
 const LIC_INFO = { cc0: { label: 'CC0', credit: false }, pd: { label: 'Public domain', credit: false }, epidemic: { label: 'Epidemic', credit: false }, by: { label: 'CC BY', credit: true }, 'by-sa': { label: 'CC BY-SA', credit: true } };
 const ipcMessage = err => String((err && err.message) || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
+// How much listening to a result downloads (0 = unknown, usually a small MP3 preview).
+const previewBytes = r => r.previewSize || (r.previewIsOriginal ? r.size || 0 : 0);
+
 function setDownloads(map) {
   S.downloads = map || {};
   S.downloadsByPath = new Map(Object.values(S.downloads).map(d => [lowPath(d.path), d]));
@@ -2392,6 +2445,17 @@ async function loadOnline(r, { play = false } = {}) {
   let file = null;
   const dl = S.downloads[r.key];
   if (dl && await api.probe(dl.path).catch(() => null)) file = dl.path;
+  // Some "previews" are the full original (Internet Archive recordings can be several GB): ask first.
+  const pb = previewBytes(r);
+  if (!file && pb > safety().previewMB * MB) {
+    const ok = await modal({
+      title: `Download ${fmtBytes(pb)} to listen?`,
+      sub: `There's no small preview of “${escapeHtml(r.title)}”: listening means downloading the whole ${fmtBytes(pb)} file first. It's kept in Soundfield's preview cache, so Save won't download it again.`,
+      ok: 'Download and listen',
+    });
+    if (tok !== S.onlineTok) return;
+    if (!ok) { wave.clear(`Preview not downloaded (${fmtBytes(pb)})`); S.loadingKey = null; return; }
+  }
   try { if (!file) file = await api.online.preview(r); }
   catch (err) {
     if (tok === S.onlineTok) wave.clear('Couldn’t load the preview. Check your internet connection.');
@@ -2404,8 +2468,17 @@ async function loadOnline(r, { play = false } = {}) {
 
 // Downloads into Documents\Soundfield Downloads (credited in Credits.txt).
 async function saveOnline(r) {
+  if (r.size > safety().saveMB * MB && !S.downloads[r.key]) {
+    const ok = await modal({
+      title: `Save a ${fmtBytes(r.size)} file?`,
+      sub: `“${escapeHtml(r.title)}” is ${fmtBytes(r.size)}. It goes into ${escapeHtml(onlineUI.destLabel())}; the free space there is checked first.`,
+      ok: 'Save it',
+    });
+    if (!ok) return null;
+  }
   try {
     const entry = await api.online.download(r, S.saveDir);
+    if (entry && entry.cancelled) return null; // didn't fit (Soundfield already said so)
     S.downloads[r.key] = entry;
     setDownloads(S.downloads);
     onlineUI.refresh();
@@ -2440,13 +2513,14 @@ function setMode(mode) {
   if (mode === 'online') onlineUI.show(); else listEl.focus();
 }
 
-const onlineUI = createOnline({ api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, ipcMessage, loadOnline, saveOnline, LIC_INFO });
+const onlineUI = createOnline({ api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, fmtBytes, ipcMessage, loadOnline, saveOnline, LIC_INFO, previewBytes });
 document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 // Anything picked in the sidebar belongs to the library.
 $('#sidebar').addEventListener('click', e => {
   if (S.mode === 'online' && e.target.closest('.side-item, .tree-row, .proj-row')) setMode('library');
 }, true);
 api.on('online:progress', p => onlineUI.progress(p));
+api.on('app:toast', msg => toast(String(msg), 6000));
 api.on('preview:progress', p => {
   if (p.key !== S.loadingKey || S.current || !p.total) return;
   wave.clear(`Loading preview… ${Math.min(99, Math.round((p.got / p.total) * 100))}%`);

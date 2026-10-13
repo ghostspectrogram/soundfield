@@ -2,6 +2,15 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.7',
+    date: '2026-10-13',
+    items: [
+      'Team SFX: the team’s shared sound library (through Lighthouse) is a source in the Online tab. Search it, listen, and Save like any other site; each sound shows its folder’s licence and credits.',
+      'Add sounds to Team SFX: right-click sounds in your library → Add to Team SFX…, pick a folder there and optional credits.',
+      'Set it up with your own Soundfield key: Settings → Accounts → Team SFX (make the key at app.lighthouseworkstation.com → Account → Soundfield key).',
+    ],
+  },
+  {
     version: '0.2.0-beta.6',
     date: '2026-10-13',
     items: [

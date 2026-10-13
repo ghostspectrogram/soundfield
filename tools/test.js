@@ -7,7 +7,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
 const { makeFixtures } = require('./fixtures');
 
 const ROOT = path.join(__dirname, '..');
@@ -68,7 +68,7 @@ async function unitTests(lib) {
 }
 
 (async () => {
-let failed = 0;
+let failed = 0, mock = null;
 try {
   if (args.includes('--perf')) {
     // A copy of the real index: startup, filtering, search and project speed on your actual library size.
@@ -99,10 +99,14 @@ try {
     // 1. An older Soundfield kept preferences in browser storage: put some there, then remove settings.json.
     run(`(async () => { localStorage.setItem('sf.prefs', JSON.stringify({ migratedProbe: 'from-localStorage', volume: -12 })); await new Promise(r => setTimeout(r, 300)); return { results: [], metrics: {} }; })()`, { SF_NO_SCAN: '1' });
     fs.rmSync(path.join(userData, 'settings.json'), { force: true });
-    // 2. First start of this version. Dialogs are answered by the test (SF_TEST).
+    // 2. First start of this version. Dialogs are answered by the test (SF_TEST). Team SFX talks to a
+    //    local stand-in for the Lighthouse service (tools/mock-teamsfx.js).
+    mock = spawn(process.execPath, [path.join(__dirname, 'mock-teamsfx.js')], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const port = await new Promise((res, rej) => { mock.stdout.once('data', d => res(String(d).trim())); mock.once('error', rej); });
     const exportDir = path.join(tmp, 'exports');
     fs.mkdirSync(exportDir);
-    const first = run(withCfg({ mode: 'first', version: pkg.version, count, fixtures, marker, exportDir, libDir: lib, driveRoot: path.parse(tmp).root }), { SF_TEST: '1' });
+    const team = `http://127.0.0.1:${port}`;
+    const first = run(withCfg({ mode: 'first', version: pkg.version, count, fixtures, marker, exportDir, libDir: lib, driveRoot: path.parse(tmp).root, team }), { SF_TEST: '1', SF_TEAMSFX_BASE: team });
     failed += report('First start', first);
     // 3. Restart: preferences and the index must still be there (plus the sound extracted from the
     //    zip and the 3 copies made inside the library).
@@ -115,6 +119,7 @@ try {
   console.error('\nTEST RUN FAILED:', e.message);
   failed++;
 } finally {
+  if (mock) mock.kill();
   if (!args.includes('--keep')) fs.rmSync(tmp, { recursive: true, force: true });
   else console.log(`\nKept test files in ${tmp}`);
 }

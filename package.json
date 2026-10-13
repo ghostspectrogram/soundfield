@@ -1,7 +1,7 @@
 {
   "name": "soundfield",
   "productName": "Soundfield",
-  "version": "0.2.0-beta.6",
+  "version": "0.2.0-beta.7",
   "description": "Fast sound effects library explorer built for surround and immersive audio.",
   "main": "main.js",
   "private": true,

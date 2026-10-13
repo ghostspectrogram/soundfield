@@ -1,7 +1,7 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
 
-const EVENTS = new Set(['scan:progress', 'lib:updated', 'lib:status', 'peaks:progress', 'dupes:progress', 'analysis:update', 'trash:progress', 'export:progress', 'online:progress', 'preview:progress', 'app:toast']);
+const EVENTS = new Set(['scan:progress', 'lib:updated', 'lib:status', 'peaks:progress', 'dupes:progress', 'analysis:update', 'trash:progress', 'export:progress', 'online:progress', 'preview:progress', 'app:toast', 'teamsfx:progress']);
 
 contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('state:get'),
@@ -44,6 +44,12 @@ contextBridge.exposeInMainWorld('api', {
     code: text => ipcRenderer.invoke('online:code', text),
     disconnect: () => ipcRenderer.invoke('online:disconnect'),
   },
+  teamsfx: {
+    settings: () => ipcRenderer.invoke('teamsfx:settings'),
+    set: s => ipcRenderer.invoke('teamsfx:set', s),
+    sync: force => ipcRenderer.invoke('teamsfx:sync', !!force),
+    upload: req => ipcRenderer.invoke('teamsfx:upload', req),
+  },
   epidemic: {
     settings: () => ipcRenderer.invoke('epidemic:settings'),
     set: s => ipcRenderer.invoke('epidemic:set', s),
@@ -58,6 +64,7 @@ contextBridge.exposeInMainWorld('api', {
   // Only answers during test runs (tools/test.js): scripted dialog answers + a log of dialogs shown.
   testDialogs: patch => ipcRenderer.invoke('test:dialogs', patch || null),
   testMetrics: () => ipcRenderer.invoke('test:metrics'),
+  testTeamStats: () => ipcRenderer.invoke('test:teamStats'),
   openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
   logProblem: msg => ipcRenderer.send('app:log', String(msg).slice(0, 4000)),
   problemReport: () => ipcRenderer.invoke('app:problemReport'),

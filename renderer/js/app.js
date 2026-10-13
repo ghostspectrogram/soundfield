@@ -830,8 +830,14 @@ function renderMeta() {
   const o = it.online || S.downloadsByPath.get(lowPath(it.path));
   if (o) {
     const lic = LIC_INFO[o.license] || { label: o.license, credit: true };
-    rows.push(['Licence', `${lic.label} · ${lic.credit ? 'credit the creator' : 'no credit needed'}`]);
-    rows.push(['By', o.creator || 'unknown']);
+    if (o.source === 'teamsfx') {
+      rows.push(['Licence', o.licenseText || 'No CREDITS.txt in its folder']);
+      if (o.credits) rows.push(['Credits', o.credits]);
+      if (o.pack) rows.push(['Folder', o.pack]);
+    } else {
+      rows.push(['Licence', `${lic.label} · ${lic.credit ? 'credit the creator' : 'no credit needed'}`]);
+      rows.push(['By', o.creator || 'unknown']);
+    }
     rows.push(['Source', o.sourceLabel]);
     if (it.online) {
       const dl = S.downloads[o.key];
@@ -1107,6 +1113,7 @@ listEl.addEventListener('contextmenu', async e => {
       { type: 'separator' },
       { label: `Add ${n.toLocaleString()} to project`, submenu: projSub },
       ratingMenu(-1, 'm'),
+      { id: 'mteam', label: `Add ${n.toLocaleString()} to Team SFX…` },
       { id: 'mcopy', label: `Copy ${n.toLocaleString()} paths` },
       { id: 'mclear', label: 'Clear selection' },
       { type: 'separator' },
@@ -1117,6 +1124,7 @@ listEl.addEventListener('contextmenu', async e => {
     else if (pick === 'mcopy') { api.copyText(sel.map(x => x.path).join('\r\n')); toast(`${n} paths copied`); }
     else if (pick === 'mproj:new') newProject(sel.filter(x => !x.zip));
     else if (pick && pick.startsWith('mrate:')) setRating(sel, Number(pick.slice(6)));
+    else if (pick === 'mteam') uploadToTeam(sel);
     else if (pick && pick.startsWith('mproj:')) { const p = projectById(pick.slice(6)); if (p) addToProject(p, sel.filter(x => !x.zip)); }
     return;
   }
@@ -1126,7 +1134,7 @@ listEl.addEventListener('contextmenu', async e => {
   const fav = S.favorites.has(it.path);
   const items = it.zip
     ? [{ id: 'x-folder', label: `Extract to “${it.name}”` }, { id: 'x-here', label: 'Extract here' }, { type: 'separator' }]
-    : [{ id: 'play', label: 'Play' }, { id: 'fav', label: fav ? 'Remove from favorites' : 'Add to favorites' }, ratingMenu(ratingOf(it)), { id: 'similar', label: 'Find similar sounds' }, projectMenu(it),
+    : [{ id: 'play', label: 'Play' }, { id: 'fav', label: fav ? 'Remove from favorites' : 'Add to favorites' }, ratingMenu(ratingOf(it)), { id: 'similar', label: 'Find similar sounds' }, projectMenu(it), { id: 'team-up', label: 'Add to Team SFX…' },
       ...(curProj ? [{ id: 'proj:remove', label: `Remove from “${curProj.name}”` }] : []), { type: 'separator' }];
   items.push({ id: 'reveal', label: 'Show in Explorer' }, { id: 'copy', label: 'Copy path' });
   if (!it.zip) {
@@ -1191,6 +1199,7 @@ listEl.addEventListener('contextmenu', async e => {
   else if (pick === 'play') { S.selection = null; wave.setSelection(null); startPlay(0); }
   else if (pick === 'fav') toggleFavorite(it);
   else if (pick === 'similar') findSimilar(it);
+  else if (pick === 'team-up') uploadToTeam([it]);
   else if (pick && pick.startsWith('rate:')) setRating([it], Number(pick.slice(5)));
   else if (pick === 'reveal') api.reveal(it.path);
   else if (pick === 'copy') { api.copyText(it.path); toast('Path copied'); }
@@ -2064,7 +2073,7 @@ $('#scan-status').addEventListener('click', async e => {
 // ------------------------------------------------------------------ keyboard
 document.addEventListener('keydown', e => {
   // Notes and marker names keep every key (Esc leaves the field).
-  if (e.target.closest && e.target.closest('#meta-mine') && e.target.matches('textarea, input')) { if (e.key === 'Escape') e.target.blur(); return; }
+  if (e.target.matches && (e.target.matches('textarea') || (e.target.closest('#meta-mine') && e.target.matches('input')))) { if (e.key === 'Escape') e.target.blur(); return; }
   const typing = !!(e.target.matches && e.target.matches('input[type=search], input[type=text]'));
   const k = e.key;
   const searchBox = S.mode === 'online' ? $('#o-search') : $('#search');
@@ -2414,7 +2423,7 @@ function modal({ title, sub = '', body = '', ok = 'OK', okClass = 'primary', can
     const close = val => { m.hidden = true; m.innerHTML = ''; document.removeEventListener('keydown', onKey, true); resolve(val); };
     const onKey = e => {
       if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(null); }
-      else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') { e.stopPropagation(); e.preventDefault(); close(card); }
+      else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON' && e.target.tagName !== 'TEXTAREA') { e.stopPropagation(); e.preventDefault(); close(card); }
       else e.stopPropagation();
     };
     document.addEventListener('keydown', onKey, true);
@@ -2690,7 +2699,7 @@ api.on('export:progress', p => {
 });
 
 // ------------------------------------------------------------------ online tab
-const LIC_INFO = { cc0: { label: 'CC0', credit: false }, pd: { label: 'Public domain', credit: false }, epidemic: { label: 'Epidemic', credit: false }, by: { label: 'CC BY', credit: true }, 'by-sa': { label: 'CC BY-SA', credit: true } };
+const LIC_INFO = { cc0: { label: 'CC0', credit: false }, pd: { label: 'Public domain', credit: false }, epidemic: { label: 'Epidemic', credit: false }, team: { label: 'Team SFX', credit: false }, by: { label: 'CC BY', credit: true }, 'by-sa': { label: 'CC BY-SA', credit: true } };
 const ipcMessage = err => String((err && err.message) || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 // How much listening to a result downloads (0 = unknown, usually a small MP3 preview).
@@ -3153,6 +3162,50 @@ function renderSimBanner() {
   b.querySelector('[data-a=close]').addEventListener('click', () => { S.similar = null; S.scope = { type: 'all' }; renderTree(); applyFilters(); });
 }
 
+// ------------------------------------------------------------------ Team SFX: adding sounds
+// Uploads library sounds to the team library (through Lighthouse, with your Soundfield key).
+// Everyone sees them after their next index refresh. 150 MB per file, 300 uploads a day per key.
+async function uploadToTeam(items) {
+  items = items.filter(canKeep);
+  if (!items.length) return;
+  const st = await api.teamsfx.settings().catch(() => null);
+  if (!st || !st.hasKey) { toast('Team SFX needs your Soundfield key first.'); onlineUI.teamDialog(); return; }
+  const big = items.filter(it => (it.rec.size || 0) > 150 * MB);
+  const ok = items.filter(it => !big.includes(it));
+  if (!ok.length) { toast('Team SFX takes files up to 150 MB; these are all bigger.', 5000); return; }
+  const bytes = ok.reduce((t, it) => t + (it.rec.size || 0), 0);
+  const n = ok.length, first = ok[0];
+  const folder0 = prefs.teamFolder || `Drop here/${first.folder ? first.folder.split('/').pop() : first.lib.name}`;
+  const card = await modal({
+    title: `Add ${n.toLocaleString()} sound${n === 1 ? '' : 's'} to Team SFX`,
+    sub: `<b>${fmtBytes(bytes)}</b> uploaded to the team’s shared library, where everyone on the team finds ${n === 1 ? 'it' : 'them'} after their next refresh. Your files here aren’t changed.`
+      + (big.length ? ` <span style="color:var(--warn)">${big.length} over 150 MB will be skipped.</span>` : '')
+      + (n > 300 ? ` <span style="color:var(--warn)">Each key can add 300 files a day; the rest will fail until tomorrow.</span>` : ''),
+    body: `<label class="field"><span>Folder in Team SFX</span><input name="folder" type="text" value="${escapeHtml(folder0)}" spellcheck="false"></label>
+      <label class="field"><span>Credits (optional)</span><textarea name="credits" rows="2" placeholder="e.g. Recorded by Landon, CC0"></textarea></label>
+      <div class="key-help">Credits become that folder’s CREDITS.txt (replacing one that’s there), shown with each sound in it. Same-named files are kept as “name (2)”.</div>`,
+    ok: `Upload ${n.toLocaleString()}`,
+  });
+  if (!card) return;
+  const folder = card.querySelector('input[name=folder]').value.trim();
+  const credits = card.querySelector('textarea[name=credits]').value.trim();
+  if (!folder) { toast('Pick a folder inside Team SFX, e.g. Drop here/Rain pack.'); return; }
+  prefs.teamFolder = folder;
+  savePrefs();
+  let res;
+  try { res = await api.teamsfx.upload({ paths: ok.map(it => it.path), folder, credits }); }
+  catch (err) { toast(`Team SFX: ${ipcMessage(err)}`, 7000); return; }
+  const failed = res.failed.length;
+  toast(failed
+    ? `Added ${res.done.length} of ${n} to Team SFX / ${res.folder}. ${failed} failed: ${res.failed[0].error}`
+    : `Added ${res.done.length.toLocaleString()} sound${res.done.length === 1 ? '' : 's'} to Team SFX / ${res.folder}`, failed ? 9000 : 4500);
+  return res;
+}
+api.on('teamsfx:progress', p => {
+  if (p.finished) return;
+  toast(`Adding to Team SFX: ${(p.done + 1).toLocaleString()} of ${p.total.toLocaleString()} · ${p.name}`, 120000);
+});
+
 // ------------------------------------------------------------------ toast
 // A toast can offer Undo (also Ctrl+Z while it shows).
 let toastTimer = 0, toastUndo = null;
@@ -3285,7 +3338,7 @@ async function boot() {
   window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, savePrefs, openFolder, goUp, folderChain, excludingFolder, extraCopies,
     addToProject, removeFromProject, relinkProject, openProject, projectById, exportProject, renderProjects, saveProjects, setMode, onlineUI, loadOnline,
     findDupes, showAbout, settingsUI, applySetting, setMatch, setVarispeed, setSpecView, setSpecRange,
-    setRating, ratingOf, addMarker, findSimilar, setFolderHidden, relinkMine, runUndo, clearRecent, isHiddenItem, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
+    setRating, ratingOf, addMarker, findSimilar, uploadToTeam, setFolderHidden, relinkMine, runUndo, clearRecent, isHiddenItem, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
   showWhatsNew();
 }
 boot();

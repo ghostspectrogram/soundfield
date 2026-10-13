@@ -363,6 +363,37 @@
   log = await D({ open: null });
   check('Warns before linking a whole drive', added.length === 0 && has(log, /a whole drive/), added.length ? 'linked it' : 'skipped');
 
+  // ---------------------------------------------------------------- Team SFX (a local stand-in for the Lighthouse service)
+  if (CFG.team) {
+    const T = window.api.teamsfx;
+    const stats = () => window.api.testTeamStats();
+    await T.set({ key: 'lhsk_wrong' });
+    let msg = '';
+    try { await T.sync(true); } catch (err) { msg = String(err.message || err); }
+    check('Team SFX: a wrong key is explained', /Soundfield key/.test(msg), msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, '').slice(0, 70));
+    await T.set({ key: 'lhsk_test_ok' });
+    let st = await T.sync(true);
+    check('Team SFX: the index loads', st.hasKey && st.files === 2 && !/lhsk_test_ok/.test(JSON.stringify(st)), `${st.files} sounds, key shown as ${st.keyHint}`);
+    const found = await window.api.online.search({ query: 'pistol', page: 1, sources: ['teamsfx'], types: ['wav', 'aiff', 'flac', 'mp3', 'ogg'] });
+    const hit = found.results[0];
+    check('Team SFX: search', found.results.length === 1 && hit.title === 'Pistol Shot 01' && hit.licenseText.startsWith('Epidemic') && found.totals.teamsfx === 1, hit ? `${hit.title} · ${hit.licenseText}` : JSON.stringify(found.errors));
+    const file = hit && await window.api.online.preview(hit).catch(e => String(e));
+    const s1 = await stats();
+    check('Team SFX: listening downloads the file through the service', typeof file === 'string' && await window.api.exists(file) && s1.fileGets === 1, String(file).slice(-40));
+    const entry = await window.api.online.download(hit, CFG.exportDir + '\\Team saves').catch(e => ({ error: String(e) }));
+    const s2 = await stats();
+    check('Team SFX: Save reuses the preview', entry && entry.quality === 'original' && entry.licenseText && s2.fileGets === 1, entry.error || `${entry.quality}, ${s2.fileGets} download(s)`);
+    await until(() => S.libs.some(l => entry.path && entry.path.startsWith(l.path)), 5000);
+    for (const l of S.libs.filter(l => entry.path && entry.path.startsWith(l.path))) { await window.api.removeLibrary(l.id); S.libs = S.libs.filter(x => x !== l); }
+    const up = await T.upload({ paths: [tick.path], folder: 'Drop here/../Test pack', credits: 'Recorded by the test' });
+    const s3 = await stats();
+    const u0 = s3.uploads[0] || {};
+    check('Team SFX: adding a sound (with credits)', up.done.length === 1 && u0.name === 'Click Tick.aif' && u0.folder === 'Drop here/Test pack' && u0.size === tick.rec.size && s3.credits[0] && s3.credits[0].text === 'Recorded by the test', `${u0.folder} / ${u0.name}, ${u0.size} bytes`);
+    st = await T.sync(true);
+    check('Team SFX: the index picks up changes with its cursor', st.files === 3 && s3.index + 1 === (await stats()).index, `${st.files} sounds`);
+    await T.set({ forget: true });
+  }
+
   // ---------------------------------------------------------------- settings panel
   sf.settingsUI.open('waveform');
   const panel = document.querySelector('#settings');

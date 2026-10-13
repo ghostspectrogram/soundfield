@@ -11,6 +11,7 @@ const { writeRegionSync } = require('./lib/region');
 const { extractZip, extractDest, zipListing } = require('./lib/zip');
 const store = require('./lib/store');
 const online = require('./lib/online');
+const teamsfx = require('./lib/teamsfx');
 
 if (process.env.SF_USERDATA) app.setPath('userData', process.env.SF_USERDATA);
 
@@ -70,6 +71,8 @@ if (testDialogs) {
     testDialogs.log.push({ kind: 'box', title: o.title || '', message: o.message || '', detail: o.detail || '', buttons: o.buttons || [], response });
     return { response };
   };
+  // What the local Team SFX stand-in was asked for (tools/mock-teamsfx.js; only its own address).
+  ipcMain.handle('test:teamStats', async () => (process.env.SF_TEAMSFX_BASE ? (await net.fetch(process.env.SF_TEAMSFX_BASE + '/__stats')).json() : null));
   // Memory use of each Soundfield process (for the speed / memory runs).
   ipcMain.handle('test:metrics', () => app.getAppMetrics().map(m => ({ type: m.type, mb: Math.round(m.memory.workingSetSize / 1024) })));
   ipcMain.handle('test:dialogs', (e, patch) => {
@@ -269,7 +272,7 @@ function pumpAnalysis() {
   const lib = libraries.find(l => l.id === id);
   if (!lib || lib.offline) return pumpAnalysis();
   if (prefsNow().backgroundSorting === false) { analysisQueue.length = 0; return; } // turned off in Settings
-  const epi = new Set(Object.values(store.downloads()).filter(d => d.source === 'epidemic').map(d => path.resolve(d.path).toLowerCase()));
+  const epi = new Set(Object.values(store.downloads()).filter(d => d.source === 'epidemic' || (d.source === 'teamsfx' && /epidemic/i.test(d.licenseText || ''))).map(d => path.resolve(d.path).toLowerCase()));
   const records = store.index(id).filter(r => !epi.has(path.join(lib.path, r.rel).toLowerCase()));
   const cache = store.analysis(id);
   // Forget files that are gone.
@@ -1096,6 +1099,44 @@ async function epiFileUrl(id, fileType) {
   return url;
 }
 
+// ------------------------------------------------------------------ Team SFX
+// The team's shared library through the Lighthouse service (lib/teamsfx.js). Your own Soundfield key
+// is stored encrypted on this PC; the index is kept in teamsfx.json and refreshed with its cursor
+// when you search, at most every 3 minutes.
+let teamState = null, teamSyncing = null;
+const teamKey = () => unseal(store.online().tsKey);
+function teamIndex() { if (!teamState) teamState = store.teamIndex() || teamsfx.emptyIndex(); return teamState; }
+function publicTeam() {
+  const k = teamKey(), s = teamIndex();
+  return { hasKey: !!k, keyHint: keyHint(k), files: Object.keys(s.files).length, syncedAt: s.syncedAt || 0, base: teamsfx.BASE };
+}
+function teamSync(force = false) {
+  if (teamSyncing) return teamSyncing;
+  teamSyncing = teamsfx.sync(teamKey(), teamIndex(), { force })
+    .then(({ state, changed }) => { teamState = state; store.saveTeamIndex(state); return changed; })
+    .catch(err => { store.saveTeamIndex(teamIndex()); throw err; }) // keeps the time of the last request
+    .finally(() => { teamSyncing = null; });
+  return teamSyncing;
+}
+async function teamSearch(req) {
+  const out = { results: [], more: { teamsfx: false }, totals: {}, errors: {} };
+  const s = teamIndex();
+  try { if (!s.syncedAt || Date.now() - s.syncedAt > 3 * 60 * 1000) await teamSync(); }
+  catch (err) { if (!s.syncedAt) { out.errors.teamsfx = err.message; return out; } } // an older index still searches
+  const types = Array.isArray(req.types) && req.types.length && req.types.length < 5 ? new Set(req.types) : null;
+  const r = teamsfx.search(teamIndex(), req.query, req.page || 1, types);
+  out.results = r.results;
+  out.more.teamsfx = r.more;
+  out.totals.teamsfx = r.total;
+  return out;
+}
+// A file that's gone (404) is dropped from the index straight away.
+function teamError(r, err) {
+  if (r.source !== 'teamsfx') return err;
+  if (err.status === 404) { delete teamIndex().files[r.id]; store.saveTeamIndex(teamIndex()); }
+  return new Error({ 401: 'Team SFX didn’t accept your Soundfield key (Settings → Accounts → Team SFX).', 403: 'Your Soundfield key has been turned off by the Team SFX owner.', 404: 'That sound is no longer in Team SFX.', 429: 'Team SFX: too many downloads for now (2000 a day per key).', 503: 'Team SFX can’t reach its Dropbox right now. Try again later.' }[err.status] || err.message);
+}
+
 // The preview cache keeps the most recent 300 files / 300 MB. Half-finished downloads left
 // behind by a crash are removed too. Runs at most once a minute.
 let prunedAt = 0;
@@ -1129,7 +1170,7 @@ const previewFile = r => {
   return path.join(previewDir(), `${String(r.key).replace(/[^a-z0-9]+/gi, '-')}.${ext}`);
 };
 // Freesound HQ previews run at roughly 128–190 kbps; over-estimating only adds an empty range.
-const previewSizeHint = r => (r.source === 'freesound' ? Math.max(64 * 1024, Math.ceil((r.duration || 0) * 24000))
+const previewSizeHint = r => (r.source === 'teamsfx' ? 0 : r.source === 'freesound' ? Math.max(64 * 1024, Math.ceil((r.duration || 0) * 24000))
   : r.previewSize > 512 * 1024 ? r.previewSize : 0); // exact size known (Internet Archive): only worth splitting when big
 
 const previewJobs = new Map(); // file -> Promise
@@ -1148,10 +1189,11 @@ function fetchPreview(r) {
   };
   const get = async () => {
     // Epidemic results from the developer key carry no preview link; one is asked for with the account key.
-    const url = r.source === 'epidemic' && !r.previewUrl ? await epiFileUrl(r.id, 'MP3') : r.previewUrl;
-    if (!/^https:\/\//.test(url || '')) throw new Error('No preview available');
+    const url = r.source === 'epidemic' && !r.previewUrl ? await epiFileUrl(r.id, 'MP3') : r.source === 'teamsfx' ? teamsfx.fileUrl(r.id) : r.previewUrl;
+    if (!/^https:\/\//.test(url || '') && !teamsfx.isServiceUrl(url)) throw new Error('No preview available');
     const hint = previewSizeHint(r);
-    await (hint ? online.downloadRanges(url, file, hint, progress) : online.download(url, file, {}, progress));
+    const headers = r.source === 'teamsfx' ? teamsfx.authHeaders(teamKey()) : {};
+    await (hint ? online.downloadRanges(url, file, hint, progress) : online.download(url, file, headers, progress).catch(err => { throw teamError(r, err); }));
     prunePreviews();
     return file;
   };
@@ -1162,6 +1204,7 @@ function fetchPreview(r) {
 
 function registerOnlineIpc() {
   ipcMain.handle('online:search', async (e, req) => {
+    if ((req.sources || []).length === 1 && req.sources[0] === 'teamsfx') return teamSearch(req);
     const auth = onlineSettings();
     if ((req.sources || []).includes('epidemic')) auth.epidemic = epiSettings(); // { apiKey, accountKey }
     return online.search(req, auth);
@@ -1184,12 +1227,13 @@ function registerOnlineIpc() {
     if (known && fs.existsSync(known.path) && path.dirname(known.path).toLowerCase() === dir.toLowerCase()) return { ...known, already: true };
     let url = r.previewUrl, ext = r.previewExt || 'mp3', headers = {}, quality = 'preview';
     if (r.source === 'epidemic') { url = await epiFileUrl(r.id, 'WAV'); quality = 'original'; ext = 'wav'; } // your subscription, via the MCP server
+    else if (r.source === 'teamsfx') { url = teamsfx.fileUrl(r.id); headers = teamsfx.authHeaders(teamKey()); quality = 'original'; ext = r.ext; }
     else if (r.downloadUrl) { url = r.downloadUrl; quality = 'original'; ext = r.ext; } // Wikimedia Commons / Internet Archive original file
     else if (r.source === 'freesound' && r.original) {
       const bearer = await freesoundBearer();
       if (bearer) { url = `${online.FS_API}/sounds/${encodeURIComponent(r.id)}/download/`; headers = { Authorization: `Bearer ${bearer}` }; ext = r.ext || 'wav'; quality = 'original'; }
     }
-    if (!/^https:\/\//.test(url || '')) throw new Error('This sound has no downloadable file');
+    if (!/^https:\/\//.test(url || '') && !teamsfx.isServiceUrl(url)) throw new Error('This sound has no downloadable file');
     ext = ext === 'aiff' ? 'aif' : ext.replace(/[^a-z0-9]/gi, '').slice(0, 5);
     if (r.size && quality === 'original' && !(await ensureSpace(dir, r.size, `“${r.title}” (${fmtBytes(r.size)})`))) return { cancelled: true };
     const base = online.safeName(r.title) + (quality === 'preview' ? ' (preview)' : '');
@@ -1213,11 +1257,12 @@ function registerOnlineIpc() {
     const lic = online.LICENSES[r.license] || { name: r.license, credit: true };
     const entry = {
       path: dest, source: r.source, sourceLabel: r.sourceLabel, title: r.title, creator: r.creator, pageUrl: r.pageUrl,
-      license: r.license, licenseLabel: lic.label || r.license, licenseUrl: r.licenseUrl || '', credit: lic.credit, quality, at: Date.now(),
+      license: r.license, licenseLabel: lic.label || r.license, licenseUrl: r.licenseUrl || '', credit: r.source === 'teamsfx' ? !!r.credit : lic.credit, quality, at: Date.now(),
+      ...(r.source === 'teamsfx' ? { licenseText: r.licenseText || '', credits: r.credits || '', id: r.id, rev: r.rev } : {}),
     };
     downloads[r.key] = entry;
     store.saveDownloads(downloads);
-    const line = `${path.relative(root, dest)}\r\n    ${online.attributionText(r)}\r\n    ${lic.credit ? 'Credit required: include the line above in your credits.' : 'No credit required (you may still credit the creator).'}\r\n\r\n`;
+    const line = `${path.relative(root, dest)}\r\n    ${online.attributionText(r)}\r\n    ${entry.credit ? 'Credit required: include the line above in your credits.' : 'No credit required (you may still credit the creator).'}\r\n\r\n`;
     if (prefsNow().writeCredits !== false) { // Settings → Saving & files
       const credits = path.join(root, 'Credits.txt');
       if (!fs.existsSync(credits)) fs.writeFileSync(credits, '﻿Sounds downloaded with Soundfield, with their licences.\r\nKeep this file: it is your record of where each sound came from.\r\n\r\n');
@@ -1295,6 +1340,43 @@ function registerOnlineIpc() {
     await freesoundToken({ grant_type: 'authorization_code', code });
     return publicOnline();
   });
+  // ---------------------------------------------------------------- Team SFX
+  ipcMain.handle('teamsfx:settings', () => publicTeam());
+  ipcMain.handle('teamsfx:set', (e, { key, forget } = {}) => {
+    const o = store.online();
+    if (typeof key === 'string' && key.trim()) {
+      const k = key.trim();
+      if (k !== teamKey()) { o.tsKey = seal(k); teamState = null; store.saveTeamIndex(teamsfx.emptyIndex()); } // a different person's key: start the index again
+    }
+    if (forget) delete o.tsKey;
+    store.saveOnline(o);
+    return publicTeam();
+  });
+  // Checks the key by fetching the index (at most once a minute).
+  ipcMain.handle('teamsfx:sync', async (e, force) => { await teamSync(!!force); return publicTeam(); });
+  // Adds sounds to Team SFX, one at a time: { paths, folder, credits }. Progress: teamsfx:progress.
+  ipcMain.handle('teamsfx:upload', async (e, { paths, folder, credits } = {}) => {
+    const key = teamKey();
+    if (!key) throw new Error('Add your Soundfield key first: Settings → Accounts → Team SFX.');
+    const dir = teamsfx.cleanFolder(folder);
+    if (!dir) throw new Error('Pick a folder inside Team SFX, e.g. Drop here/Rain pack.');
+    const list = (Array.isArray(paths) ? paths : []).filter(p => typeof p === 'string' && fs.existsSync(p));
+    const done = [], failed = [];
+    for (let i = 0; i < list.length; i++) {
+      send('teamsfx:progress', { done: i, total: list.length, name: path.basename(list[i]) });
+      try { done.push({ path: list[i], ...(await teamsfx.upload(key, dir, list[i])) }); }
+      catch (err) {
+        failed.push({ path: list[i], error: err.message });
+        if ([401, 403, 429].includes(err.status) && !(err.status === 429 && err.retryAfter && err.retryAfter < 90)) { for (const p of list.slice(i + 1)) failed.push({ path: p, error: err.message }); break; }
+      }
+    }
+    if (done.length && typeof credits === 'string' && credits.trim()) {
+      try { await teamsfx.setCredits(key, dir, credits.trim()); } catch (err) { failed.push({ path: dir + '/CREDITS.txt', error: err.message }); }
+    }
+    send('teamsfx:progress', { finished: true });
+    return { folder: dir, done, failed };
+  });
+
   ipcMain.handle('epidemic:settings', () => publicEpi());
   // Keys are only replaced when a new one is typed; forget: 'apiKey' | 'accountKey' removes one.
   ipcMain.handle('epidemic:set', (e, { apiKey, accountKey, forget } = {}) => {

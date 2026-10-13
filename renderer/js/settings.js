@@ -91,6 +91,7 @@ export function createSettings(ctx) {
     { section: 'search', type: 'custom', render: renderSearchHelp, label: 'Search tricks', desc: '', keywords: 'rating stars notes markers filter' },
     // ---------------------------------------------------------------- accounts
     { section: 'accounts', type: 'custom', render: el => renderAccount(el, 'freesound'), label: 'Freesound', desc: 'A free key gives better search; connecting your account lets Save download original WAV / AIFF / FLAC files.', keywords: 'api key oauth' },
+    { section: 'accounts', type: 'custom', render: el => renderAccount(el, 'teamsfx'), label: 'Team SFX', desc: 'The team’s shared sound library through Lighthouse, with your own Soundfield key: search, listen, save and add sounds.', keywords: 'lighthouse dropbox team shared key lhsk' },
     { section: 'accounts', type: 'custom', render: el => renderAccount(el, 'epidemic'), label: 'Epidemic Sound', desc: 'Your own Epidemic account key: search, previews and WAV saves through your subscription.', keywords: 'api key mcp' },
     // ---------------------------------------------------------------- safety
     { section: 'safety', key: 'safety.confirmGB', type: 'number', def: SAFETY_DEFAULTS.confirmGB, min: 1, max: 10000, step: 1, unit: 'GB', label: 'Ask twice above this size', desc: 'Copies, zips, extracts and recycles bigger than this need a second confirmation.' },
@@ -339,6 +340,7 @@ export function createSettings(ctx) {
     line.className = 'set-muted';
     if (which === 'freesound') line.innerHTML = !st || !st.hasKey ? 'No key: searched through Openverse, saves are MP3 previews.'
       : st.connected ? `<span class="set-ok">●</span> Account connected${st.user ? `: <b>${escapeHtml(st.user)}</b>` : ''}. Saves are original files.` : `<span class="set-ok">●</span> Key saved. Connect your account to save original files.`;
+    else if (which === 'teamsfx') line.innerHTML = st && st.hasKey ? `<span class="set-ok">●</span> Key saved${st.syncedAt ? ` · ${st.files.toLocaleString()} sounds` : ''}.` : 'No Soundfield key yet.';
     else line.innerHTML = st && st.hasAccountKey ? '<span class="set-ok">●</span> Account key saved.' : 'No account key yet.';
     const b = document.createElement('button');
     b.className = 'set-btn';

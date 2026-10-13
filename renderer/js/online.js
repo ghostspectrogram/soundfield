@@ -38,7 +38,7 @@ const GROUPS = [['free', 'Free sites'], ['paid', 'Subscription sites'], ['person
 
 const FILE_TYPES = ['wav', 'aiff', 'flac', 'mp3', 'ogg'];
 // Soundfield search only ever returns these licences.
-const LIC_NAMES = { cc0: 'Creative Commons 0 (public domain)', pd: 'Public domain', epidemic: 'Epidemic Sound licence (your subscription)' };
+const LIC_NAMES = { cc0: 'Creative Commons 0 (public domain)', pd: 'Public domain', epidemic: 'Epidemic Sound licence (your subscription)', team: 'Team SFX' };
 const LIC_TIPS = {
   cc0: 'CC0: use it anywhere, change it, no credit needed.',
   pd: 'Public domain: use it anywhere, change it, no credit needed.',
@@ -264,7 +264,7 @@ export function createOnline(ctx) {
     const st = $('#o-status');
     if (!O.query || web()) { st.hidden = true; return; }
     const parts = [];
-    const names = { freesound: 'Freesound', commons: 'Wikimedia Commons', archive: 'Internet Archive', epidemic: 'Epidemic Sound' };
+    const names = { freesound: 'Freesound', commons: 'Wikimedia Commons', archive: 'Internet Archive', epidemic: 'Epidemic Sound', teamsfx: 'Team SFX' };
     for (const [k, n] of Object.entries(O.totals)) parts.push(`${names[k] || k}: ${Number(n).toLocaleString()} match${n === 1 ? '' : 'es'}`);
     if (O.loading) parts.push(`Still searching ${[...(O.pending || [])].map(k => names[k] || k).join(', ')}…`);
     for (const [k, msg] of Object.entries(O.errors)) parts.push(`<span class="err">${escapeHtml(names[k] || 'Search')}: ${escapeHtml(msg)}</span>`);
@@ -272,6 +272,8 @@ export function createOnline(ctx) {
     if (sources().includes('epidemic') && ep && !ep.hasAccountKey) parts.push(ep.hasKey
       ? 'Epidemic Sound: add your Epidemic account key to listen and save. <button data-x="epi">Add account key</button>'
       : 'Epidemic Sound needs your Epidemic account key. <button data-x="epi">Set up Epidemic</button>');
+    const tm = O.team;
+    if (sources().includes('teamsfx') && tm && !tm.hasKey) parts.push('Team SFX needs your own Soundfield key. <button data-x="team">Set up Team SFX</button>');
     const s = O.settings;
     if (sources().includes('freesound') && s) {
       if (!s.hasKey) parts.push('Freesound is searched through Openverse (older index, 200 searches a day), and Freesound saves are MP3 previews. <button data-x="settings">Add a free Freesound key and account</button>');
@@ -280,7 +282,7 @@ export function createOnline(ctx) {
     st.innerHTML = parts.map(p => `<span>${p}</span>`).join('');
     st.hidden = !parts.length;
   }
-  $('#o-status').addEventListener('click', e => { if (e.target.closest('[data-x=settings]')) settingsDialog(); else if (e.target.closest('[data-x=epi]')) epidemicDialog(); });
+  $('#o-status').addEventListener('click', e => { if (e.target.closest('[data-x=settings]')) settingsDialog(); else if (e.target.closest('[data-x=epi]')) epidemicDialog(); else if (e.target.closest('[data-x=team]')) teamDialog(); });
 
   // ---------------------------------------------------------------- rows
   function fmtFormat(r) {
@@ -313,7 +315,7 @@ export function createOnline(ctx) {
     c[1].textContent = r.sourceLabel;
     const li = LIC_INFO[r.license] || { label: r.license };
     c[2].innerHTML = `<span class="lic ${escapeHtml(r.license)}">${escapeHtml(li.label)}</span>`;
-    c[2].title = LIC_TIPS[r.license] || '';
+    c[2].title = r.source === 'teamsfx' ? [r.licenseText && `Licence: ${r.licenseText}`, r.credits && `Credits: ${r.credits}`, !r.licenseText && !r.credits && 'No CREDITS.txt in this folder'].filter(Boolean).join('\n') : LIC_TIPS[r.license] || '';
     c[3].textContent = r.duration ? fmtTime(r.duration) : '';
     c[4].textContent = fmtFormat(r);
     c[5].textContent = r.creator || '';
@@ -343,7 +345,7 @@ export function createOnline(ctx) {
     clearTimeout(prefetchTimer);
     prefetchTimer = setTimeout(() => {
       // Only small previews: a big original is downloaded only when you ask to listen to it.
-      for (const r of rs) if (r && !r.isMore && !S.downloads[r.key] && previewBytes(r) <= 50 * 1024 * 1024) api.online.preview(r).catch(() => {});
+      for (const r of rs) if (r && !r.isMore && r.source !== 'teamsfx' && !S.downloads[r.key] && previewBytes(r) <= 50 * 1024 * 1024) api.online.preview(r).catch(() => {});
     }, 400); // let the sound you clicked start first
   }
 
@@ -527,6 +529,67 @@ export function createOnline(ctx) {
     if (O.query) runSearch(true);
   }
 
+  // ---------------------------------------------------------------- Team SFX
+  // The team's shared library, through the Lighthouse service with your own Soundfield key.
+  async function refreshTeam() {
+    try { O.team = await api.teamsfx.settings(); } catch {}
+    renderStatus();
+  }
+  const teamLine = st => (st.syncedAt ? `${st.files.toLocaleString()} sounds in the index · updated ${new Date(st.syncedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : 'Not loaded yet.');
+
+  async function teamDialog() {
+    await refreshTeam();
+    const st = O.team || {};
+    const done = modal({
+      title: 'Team SFX',
+      sub: 'The team’s shared sound library (the SFX folder in the team Dropbox), through the Lighthouse service. Each person uses <b>their own</b> Soundfield key; it’s stored encrypted on this PC and only sent to Lighthouse.',
+      body: `<label class="field"><span>Soundfield key</span><input name="key" type="password" placeholder="${st.hasKey ? `saved (${escapeHtml(st.keyHint)}). Paste a new one to replace it` : 'lhsk_…'}" spellcheck="false" autocomplete="off"></label>
+        <div class="key-help">Make one at <a data-x="lh">app.lighthouseworkstation.com</a> → Account → Soundfield key.${st.hasKey ? ' · <a data-x="forget">Remove</a>' : ''}</div>
+        <div class="acct" id="team-check"><span>${st.hasKey ? escapeHtml(teamLine(st)) : 'No key yet.'}</span>${st.hasKey ? '<button data-x="check">Check key</button>' : ''}</div>`,
+      ok: 'Save',
+    });
+    const card = document.querySelector('#modal .modal-card');
+    card.classList.add('wide');
+    const check = async () => {
+      const box = card.querySelector('#team-check');
+      box.innerHTML = '<span>Checking with Team SFX…</span>';
+      try {
+        O.team = await api.teamsfx.sync(true);
+        box.innerHTML = `<span class="ok">●</span><span>Your key works. ${escapeHtml(teamLine(O.team))}</span>`;
+        return true;
+      } catch (err) {
+        box.innerHTML = `<span style="color:var(--warn)">${escapeHtml(ipcMessage(err))}</span>`;
+        return false;
+      }
+    };
+    card.addEventListener('click', async e => {
+      const x = e.target.closest('[data-x]');
+      if (!x) return;
+      e.preventDefault();
+      if (x.dataset.x === 'lh') api.openExternal('https://app.lighthouseworkstation.com/');
+      else if (x.dataset.x === 'check') check();
+      else if (x.dataset.x === 'forget') {
+        O.team = await api.teamsfx.set({ forget: true });
+        card.querySelector('input[name=key]').placeholder = 'removed';
+        x.remove();
+        renderStatus();
+      }
+    });
+    const ok = await done;
+    if (ok) {
+      const key = card.querySelector('input[name=key]').value.trim();
+      if (key) {
+        O.team = await api.teamsfx.set({ key });
+        const box = srcMenu.querySelector('input[value=teamsfx]');
+        if (box && !box.checked) { box.checked = true; prefs.onlineSources = sources(); savePrefs(); srcLabel(); }
+        try { O.team = await api.teamsfx.sync(true); toast(`Team SFX: your key works. ${O.team.files.toLocaleString()} sounds.`, 4500); }
+        catch (err) { toast(`Team SFX: ${ipcMessage(err)}`, 7000); }
+      }
+    }
+    await refreshTeam();
+    if (ok && O.query && sources().includes('teamsfx')) runSearch(true);
+  }
+
   // ---------------------------------------------------------------- Epidemic Sound
   async function refreshEpi() {
     try { O.epi = await api.epidemic.settings(); } catch {}
@@ -606,14 +669,16 @@ export function createOnline(ctx) {
       applyOMode();
       refreshSettings();
       refreshEpi();
+      refreshTeam();
       if (!O.query || web()) setTimeout(() => input.focus(), 0); else listEl.focus();
     },
     setMode: setOMode,
     setSaveDir,
     setRowHeight: h => list.setRowHeight(h),
     // For Settings → Accounts.
-    accountStatus: async which => (which === 'freesound' ? api.online.settings() : api.epidemic.settings()),
-    openAccount: which => (which === 'freesound' ? settingsDialog() : epidemicDialog()),
+    accountStatus: async which => (which === 'freesound' ? api.online.settings() : which === 'teamsfx' ? api.teamsfx.settings() : api.epidemic.settings()),
+    openAccount: which => (which === 'freesound' ? settingsDialog() : which === 'teamsfx' ? teamDialog() : epidemicDialog()),
+    teamDialog,
     destLabel,
     key,
     refresh() { list.refresh(); },

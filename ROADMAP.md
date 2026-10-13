@@ -37,7 +37,9 @@ The phases are merged to GitHub together once you're happy.
    - The per-sound store, with notes, star ratings, markers and recently played.
    - Smarter search: synonyms and typo tolerance.
    - Search support for the new fields, e.g. `rating:4+`.
-7. **Backups:** automatic plus manual backup / restore, with old backups deleted automatically.
+   - Added along the way: hide a folder from All sounds (the eye beside it under Libraries).
+7. **Team SFX** (added 13 Oct, beta.7): the team's shared library through the Lighthouse service, as an Online source, plus adding sounds to it. Per `TEAM-SFX-API.md` from Johnny (Athan).
+8. **Backups:** automatic plus manual backup / restore, with old backups deleted automatically.
 
 ## Also in this update
 - **Undo:** an "Undo" button on the toast after removing sounds from a project, deleting a project, clearing a rating / notes / history, or restoring a backup.

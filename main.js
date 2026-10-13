@@ -124,8 +124,9 @@ function pumpScans() {
   const w = new Worker(path.join(__dirname, 'lib', 'scan-worker.js'), { workerData: { root: lib.path, prev } });
   const finish = () => {
     const again = scanning && scanning.again;
+    const changed = !(scanning && scanning.unchanged);
     scanning = null;
-    send('scan:progress', { id, phase: 'end' });
+    send('scan:progress', { id, phase: 'end', changed });
     if (again && libraries.includes(lib)) scanQueue.unshift(id);
     pumpScans();
   };
@@ -137,11 +138,19 @@ function pumpScans() {
     } else if (m.type === 'done') {
       if (!libraries.includes(lib)) return; // removed mid-scan
       lib.offline = false;
-      lib.count = m.records.length;
       lib.scannedAt = Date.now();
-      store.saveIndex(id, m.records);
-      saveLibs();
-      send('lib:updated', { lib: libPublic(lib), records: m.records });
+      if (m.unchanged) {
+        // Same files as last time: no need to rewrite the index or resend it.
+        scanning.unchanged = true;
+        lib.count = m.count;
+        saveLibs();
+        send('lib:status', libPublic(lib));
+      } else {
+        lib.count = m.records.length;
+        store.saveIndex(id, m.records);
+        saveLibs();
+        send('lib:updated', { lib: libPublic(lib), records: m.records });
+      }
       queueAnalysis(id);
     } else if (m.type === 'error') {
       console.error('scan error', m.message);
@@ -185,17 +194,19 @@ function pumpAnalysis() {
   for (const rel of Object.keys(cache)) if (!live.has(rel)) delete cache[rel];
   const w = new Worker(path.join(__dirname, 'lib', 'analyze-worker.mjs'), { workerData: { root: lib.path, records, cache } });
   analyzing = { id, w };
+  // The cache can be several MB, so it's written every 15 s while listening (and at the end), not per batch.
+  let savedAt = Date.now();
   w.on('message', m => {
     if (m.type === 'results') {
       const map = {};
       for (const [rel, v] of Object.entries(m.results)) { cache[rel] = v; if (v[2]) map[rel] = v[2]; }
-      if (Object.keys(m.results).length) store.saveAnalysis(id, cache);
+      if (Object.keys(m.results).length && Date.now() - savedAt > 15000) { store.saveAnalysis(id, cache); savedAt = Date.now(); }
       send('analysis:update', { id, map, done: m.done, total: m.total });
     } else if (m.type === 'error') console.error('analysis error', m.message);
   });
   w.on('error', err => console.error('analysis worker', err));
   w.on('exit', () => {
-    store.saveAnalysis(id, cache);
+    if (libraries.some(l => l.id === id)) store.saveAnalysis(id, cache); // not for a library removed meanwhile
     analyzing = null;
     send('analysis:update', { id, map: {}, done: 0, total: 0, finished: true });
     pumpAnalysis();
@@ -242,37 +253,38 @@ async function probeCached(p) {
   return info;
 }
 
-let openHandle = null; // { path, fh, timer }
-async function handleFor(p) {
-  if (openHandle && openHandle.path === p) {
-    clearTimeout(openHandle.timer);
-  } else {
-    if (openHandle) openHandle.fh.close().catch(() => {});
-    openHandle = { path: p, fh: await fsp.open(p, 'r') };
+// Files being streamed stay open between reads. A handle is only closed once no read is using
+// it, so switching sounds mid-read can't break the read that's still running.
+const handles = new Map(); // path -> { fh: Promise<FileHandle>, users, timer }
+function closeHandle(p, h) {
+  if (handles.get(p) === h) handles.delete(p);
+  h.fh.then(fh => fh.close()).catch(() => {});
+}
+async function withHandle(p, fn) {
+  let h = handles.get(p);
+  if (!h) {
+    h = { fh: fsp.open(p, 'r'), users: 0, timer: null };
+    handles.set(p, h);
+    h.fh.catch(() => { if (handles.get(p) === h) handles.delete(p); });
   }
-  const h = openHandle;
-  h.timer = setTimeout(() => { if (openHandle === h) { openHandle = null; h.fh.close().catch(() => {}); } }, 4000);
-  return h.fh;
+  clearTimeout(h.timer);
+  h.users++;
+  try {
+    return await fn(await h.fh);
+  } finally {
+    if (--h.users === 0) {
+      h.timer = setTimeout(() => closeHandle(p, h), 4000);
+      // Keep only a few idle files open.
+      const idle = [...handles].filter(([, x]) => x.users === 0);
+      for (const [q, x] of idle.slice(0, Math.max(0, idle.length - 3))) { clearTimeout(x.timer); closeHandle(q, x); }
+    }
+  }
 }
 
 // ------------------------------------------------------------------ drag
 let dragIcon = null;
 function getDragIcon() {
-  if (dragIcon) return dragIcon;
-  const fromFile = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png'));
-  if (!fromFile.isEmpty()) return (dragIcon = fromFile.resize({ width: 40, height: 40, quality: 'best' }));
-  const S = 40, buf = Buffer.alloc(S * S * 4);
-  const bars = [6, 12, 20, 28, 16, 24, 10, 18, 8];
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const i = (y * S + x) * 4;
-    const r = 9, dx = Math.max(r - x, x - (S - 1 - r), 0), dy = Math.max(r - y, y - (S - 1 - r), 0);
-    if (dx * dx + dy * dy > r * r) continue;
-    let [R, G, B] = [0x2a, 0x2f, 0x3d];
-    const bi = Math.floor((x - 4) / 3.6);
-    if (x >= 4 && x < S - 4 && bi >= 0 && bi < bars.length && (x - 4) % 3.6 < 2.4 && Math.abs(y - S / 2) < bars[bi] / 2) [R, G, B] = [0x4f, 0xd1, 0xc5];
-    buf[i] = B; buf[i + 1] = G; buf[i + 2] = R; buf[i + 3] = 235;
-  }
-  dragIcon = nativeImage.createFromBitmap(buf, { width: S, height: S });
+  if (!dragIcon) dragIcon = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')).resize({ width: 40, height: 40, quality: 'best' });
   return dragIcon;
 }
 
@@ -422,12 +434,11 @@ function registerIpc() {
 
   ipcMain.handle('file:probe', (e, p) => probeCached(p));
 
-  ipcMain.handle('file:read', async (e, p, offset, length) => {
-    const fh = await handleFor(p);
+  ipcMain.handle('file:read', (e, p, offset, length) => withHandle(p, async fh => {
     const buf = Buffer.allocUnsafeSlow(length);
     const { bytesRead } = await fh.read(buf, 0, length, offset);
     return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
-  });
+  }));
 
   ipcMain.handle('file:readAll', (e, p) => fsp.readFile(p));
 
@@ -490,6 +501,7 @@ function registerIpc() {
       detail: (detail ? detail + '\n\n' : '') + names,
     });
     if (r.response !== 0) return [];
+    for (const p of paths) { const h = handles.get(p); if (h && !h.users) { clearTimeout(h.timer); closeHandle(p, h); } }
     const done = [];
     let last = 0;
     for (let i = 0; i < paths.length; i++) {
@@ -517,7 +529,7 @@ function registerIpc() {
     return done;
   });
 
-  ipcMain.handle('zip:extract',async (e, p, mode, libId) => {
+  ipcMain.handle('zip:extract', async (e, p, mode, libId) => {
     const dest = await extractZip(p, mode);
     if (libId) queueScan(libId);
     return dest;
@@ -641,12 +653,31 @@ async function epiFileUrl(id, fileType) {
   return url;
 }
 
-function prunePreviews() {
-  try {
-    const dir = previewDir();
-    const files = fs.readdirSync(dir).map(f => { const p = path.join(dir, f); return { p, t: fs.statSync(p).mtimeMs }; }).sort((a, b) => b.t - a.t);
-    for (const f of files.slice(300)) fs.unlinkSync(f.p);
-  } catch {}
+// The preview cache keeps the most recent 300 files / 300 MB. Half-finished downloads left
+// behind by a crash are removed too. Runs at most once a minute.
+let prunedAt = 0;
+function prunePreviews(force) {
+  if (!force && Date.now() - prunedAt < 60000) return;
+  prunedAt = Date.now();
+  const dir = previewDir();
+  let files;
+  try { files = fs.readdirSync(dir); } catch { return; }
+  const list = [];
+  for (const f of files) {
+    const p = path.join(dir, f);
+    try {
+      const st = fs.statSync(p);
+      if (f.endsWith('.part')) { if (Date.now() - st.mtimeMs > 3600e3) fs.unlinkSync(p); continue; }
+      list.push({ p, t: st.mtimeMs, size: st.size });
+    } catch {}
+  }
+  list.sort((a, b) => b.t - a.t);
+  let total = 0;
+  list.forEach((f, i) => {
+    total += f.size;
+    const recent = Date.now() - f.t < 600e3; // may be playing right now
+    if (!recent && (i >= 300 || total > 300 * 1024 * 1024)) { try { fs.unlinkSync(f.p); } catch {} }
+  });
 }
 
 const previewFile = r => {
@@ -660,24 +691,27 @@ const previewSizeHint = r => (r.source === 'freesound' ? Math.max(64 * 1024, Mat
 const previewJobs = new Map(); // file -> Promise
 function fetchPreview(r) {
   const file = previewFile(r);
-  if (fs.existsSync(file)) return Promise.resolve(file);
-  if (previewJobs.has(file)) return previewJobs.get(file);
-  if (r.source === 'epidemic' && !r.previewUrl) {
-    const job = epiFileUrl(r.id, 'MP3').then(url => { previewJobs.delete(file); return fetchPreview({ ...r, previewUrl: url }); });
-    previewJobs.set(file, job.finally(() => previewJobs.delete(file)));
-    return previewJobs.get(file);
+  if (fs.existsSync(file)) {
+    fs.promises.utimes(file, new Date(), new Date()).catch(() => {}); // recently played previews are kept longest
+    return Promise.resolve(file);
   }
-  if (!/^https:\/\//.test(r.previewUrl || '')) return Promise.reject(new Error('No preview available'));
+  if (previewJobs.has(file)) return previewJobs.get(file);
   let last = 0;
   const progress = (got, total) => {
     if (Date.now() - last < 120) return;
     last = Date.now();
     send('preview:progress', { key: r.key, got, total });
   };
-  const hint = previewSizeHint(r);
-  const job = (hint ? online.downloadRanges(r.previewUrl, file, hint, progress) : online.download(r.previewUrl, file, {}, progress))
-    .then(() => { prunePreviews(); return file; })
-    .finally(() => previewJobs.delete(file));
+  const get = async () => {
+    // Epidemic results from the developer key carry no preview link; one is asked for with the account key.
+    const url = r.source === 'epidemic' && !r.previewUrl ? await epiFileUrl(r.id, 'MP3') : r.previewUrl;
+    if (!/^https:\/\//.test(url || '')) throw new Error('No preview available');
+    const hint = previewSizeHint(r);
+    await (hint ? online.downloadRanges(url, file, hint, progress) : online.download(url, file, {}, progress));
+    prunePreviews();
+    return file;
+  };
+  const job = get().finally(() => previewJobs.delete(file));
   previewJobs.set(file, job);
   return job;
 }
@@ -706,8 +740,7 @@ function registerOnlineIpc() {
     if (known && fs.existsSync(known.path) && path.dirname(known.path).toLowerCase() === dir.toLowerCase()) return { ...known, already: true };
     let url = r.previewUrl, ext = r.previewExt || 'mp3', headers = {}, quality = 'preview';
     if (r.source === 'epidemic') { url = await epiFileUrl(r.id, 'WAV'); quality = 'original'; ext = 'wav'; } // your subscription, via the MCP server
-    else if (r.source === 'commons') { quality = 'original'; ext = r.ext; }
-    else if (r.downloadUrl) { url = r.downloadUrl; quality = 'original'; ext = r.ext; } // Internet Archive original file
+    else if (r.downloadUrl) { url = r.downloadUrl; quality = 'original'; ext = r.ext; } // Wikimedia Commons / Internet Archive original file
     else if (r.source === 'freesound' && r.original) {
       const bearer = await freesoundBearer();
       if (bearer) { url = `${online.FS_API}/sounds/${encodeURIComponent(r.id)}/download/`; headers = { Authorization: `Bearer ${bearer}` }; ext = r.ext || 'wav'; quality = 'original'; }
@@ -719,11 +752,12 @@ function registerOnlineIpc() {
     send('online:progress', { key: r.key, got: 0, total: r.size || 0 });
     let last = 0;
     try {
-      if (quality === 'preview') {
-        // Same file as the preview you just listened to: reuse it instead of downloading again.
-        const cached = await fetchPreview(r);
+      // Same file as the preview you just listened to: reuse it instead of downloading again.
+      const cached = quality === 'preview' || (r.previewIsOriginal && fs.existsSync(previewFile(r)));
+      if (cached) {
+        const from = await fetchPreview(r);
         fs.mkdirSync(dir, { recursive: true });
-        fs.copyFileSync(cached, dest);
+        fs.copyFileSync(from, dest);
       } else {
         await online.download(url, dest, headers, (got, total) => {
           if (Date.now() - last > 150) { last = Date.now(); send('online:progress', { key: r.key, got, total: total || r.size || 0 }); }
@@ -877,6 +911,7 @@ app.whenReady().then(async () => {
   // Quietly pick up added / changed / removed files after the UI is up.
   win.webContents.once('did-finish-load', () => {
     setTimeout(() => libraries.forEach(l => queueScan(l.id)), 1500);
+    setTimeout(() => prunePreviews(true), 8000);
   });
 });
 

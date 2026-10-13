@@ -49,7 +49,6 @@
           <div class="dd-foot"><button data-act="all">Select all</button><button data-act="lossless">Lossless only</button></div>
         </div>
       </div>
-      <span id="o-lic-note" title="Only sounds you can use in anything without crediting anyone: CC0 and public domain, plus Epidemic Sound (covered by your own subscription) when it's switched on under Sources.">No credit needed</span>
       <button id="o-epi" class="view-toggle" title="Epidemic Sound: your keys">
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M8 12h8M12 8v8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
         <span>Epidemic</span>
@@ -202,7 +201,7 @@
         <div class="empty-card">
           <div class="empty-ring"></div>
           <h2>Find free sound effects</h2>
-          <p>Search Freesound and Wikimedia Commons for attribution-free sounds (CC0 and public domain): use them in anything, including paid work, with no credit needed. <b>Save</b> puts the sound in <i>Documents\Soundfield Downloads</i> and notes where it came from in <i>Credits.txt</i>.</p>
+          <p>Search Freesound, Wikimedia Commons and the Internet Archive for attribution-free sounds (CC0 and public domain), plus Epidemic Sound with your subscription: use them in anything, including paid work, with no credit needed. <b>Save</b> puts the sound in your save folder (<i>Save to</i>, above) and notes where it came from in <i>Credits.txt</i>.</p>
         </div>
       </div>
     </div>
@@ -264,6 +263,10 @@
       <div id="lanes">
         <div id="ruler-spacer"></div>
         <div id="lanes-labels"></div>
+      </div>
+      <div id="db-col">
+        <div id="db-head" title="Level scale in dBFS: 0 at the lane edge, −40 at the centre line. ▸ marks each channel's peak.">dB</div>
+        <canvas id="dbscale"></canvas>
       </div>
       <div id="wave-wrap">
         <canvas id="ruler"></canvas>

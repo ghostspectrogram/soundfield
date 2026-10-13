@@ -44,8 +44,16 @@ async function main() {
   if (process.argv.includes('--no-install')) return;
 
   // Swap the new build into place. Windows locks a running exe's folder, so a rename fails while it's open.
-  const old = INSTALL_DIR + '.old';
-  fs.rmSync(old, { recursive: true, force: true });
+  // Previous builds are set aside as Soundfield.old-<time> and deleted when possible. Antivirus or
+  // indexing can briefly hold files in them, so a folder that won't delete is left for next time.
+  const tidy = () => {
+    for (const n of fs.readdirSync(path.dirname(INSTALL_DIR))) {
+      if (!/^Soundfield\.old(-\d+)?$/.test(n)) continue;
+      try { fs.rmSync(path.join(path.dirname(INSTALL_DIR), n), { recursive: true, force: true }); } catch {}
+    }
+  };
+  if (fs.existsSync(path.dirname(INSTALL_DIR))) tidy();
+  const old = `${INSTALL_DIR}.old-${Date.now()}`;
   // With --wait, keep trying until Soundfield is closed, then install right away.
   const wait = process.argv.includes('--wait');
   let told = false;
@@ -63,7 +71,7 @@ async function main() {
   }
   fs.mkdirSync(path.dirname(INSTALL_DIR), { recursive: true });
   fs.cpSync(outDir, INSTALL_DIR, { recursive: true });
-  fs.rmSync(old, { recursive: true, force: true });
+  tidy();
 
   const exe = path.join(INSTALL_DIR, 'Soundfield.exe');
   const ps = `$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:SF_LNK);

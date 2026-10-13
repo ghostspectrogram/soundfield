@@ -1,6 +1,6 @@
 // The Online tab has two modes:
-//   Soundfield search: sounds you can preview and save straight into Soundfield
-//                      (Freesound and Wikimedia Commons, through their official APIs).
+//   Soundfield search: sounds you can preview and save straight into Soundfield (Freesound,
+//                      Wikimedia Commons, Internet Archive and Epidemic Sound, through their official APIs).
 //   Website search:    sound sites that open your search in the browser, because
 //                      they don't let other apps search them.
 import { VList } from './vlist.js';
@@ -37,14 +37,14 @@ const TERMS = {
 const GROUPS = [['free', 'Free sites'], ['paid', 'Subscription sites'], ['personal', 'Not for commercial work']];
 
 const FILE_TYPES = ['wav', 'aiff', 'flac', 'mp3', 'ogg'];
-const LIC_NAMES = { cc0: 'Creative Commons 0 (public domain)', pd: 'Public domain', by: 'Creative Commons Attribution', 'by-sa': 'Creative Commons Attribution-ShareAlike' };
+// Soundfield search only ever returns these licences.
+const LIC_NAMES = { cc0: 'Creative Commons 0 (public domain)', pd: 'Public domain', epidemic: 'Epidemic Sound licence (your subscription)' };
 const LIC_TIPS = {
   cc0: 'CC0: use it anywhere, change it, no credit needed.',
   pd: 'Public domain: use it anywhere, change it, no credit needed.',
-  by: 'CC BY: use it anywhere, including paid work. You must credit the creator (Soundfield writes the credit line to Credits.txt).',
   epidemic: 'Epidemic Sound: covered by your own Epidemic subscription. No credit needed; anything you publish while subscribed stays cleared.',
-  'by-sa': 'CC BY-SA: use it anywhere with credit, but anything you make from it must be shared under the same licence. Often impractical for film/game work.',
 };
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 export function createOnline(ctx) {
   const { api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, ipcMessage, loadOnline, saveOnline, LIC_INFO } = ctx;
@@ -182,6 +182,14 @@ export function createOnline(ctx) {
   input.addEventListener('input', () => { if (web()) renderWeb(); });
 
   // ---------------------------------------------------------------- search
+  // Each source is asked on its own and its results are listed as soon as they arrive, so a
+  // slow site (the Internet Archive sometimes takes many seconds) never holds up the others.
+  const interleave = lists => {
+    const out = [];
+    for (let i = 0; lists.some(l => i < l.length); i++) for (const l of lists) if (i < l.length) out.push(l[i]);
+    return out;
+  };
+
   async function runSearch(reset) {
     const q = reset ? input.value.trim() : O.query;
     if (!q) return;
@@ -194,29 +202,41 @@ export function createOnline(ctx) {
       listEl.scrollTop = 0;
       list.select(-1, false);
     } else O.page++;
-    const tok = ++O.tok;
+    const tok = ++O.tok, page = O.page, types = fileTypes();
+    const base = O.results.slice(); // earlier pages stay where they are
+    const lists = {}; // this page's results, per source
+    // While you're just waiting, each source's best hits are mixed in near the top. Once you've
+    // clicked or scrolled (or for later pages), late arrivals go at the end so rows don't move.
+    let settled = page > 1, started = false;
+    O.pending = new Set(srcs);
     O.loading = true;
     render();
-    let res;
-    try {
-      res = await api.online.search({ query: q, page: O.page, sources: srcs, licenses: ['cc0', 'pd'], types: fileTypes() });
-    } catch (err) {
+    await Promise.all(srcs.map(async src => {
+      let res = null;
+      try { res = await api.online.search({ query: q, page, sources: [src], licenses: ['cc0', 'pd'], types }); }
+      catch (err) { if (tok === O.tok) O.errors[src] = ipcMessage(err); }
       if (tok !== O.tok) return;
-      O.loading = false;
-      O.errors = { search: ipcMessage(err) };
+      O.pending.delete(src);
+      O.loading = O.pending.size > 0;
+      O.more[src] = !!(res && res.more[src]);
+      if (res) {
+        if (res.totals && res.totals[src] != null) O.totals[src] = res.totals[src];
+        Object.assign(O.errors, res.errors);
+        O.via = res.via;
+        const fresh = res.results.filter(r => !O.seen.has(r.key));
+        for (const r of fresh) O.seen.add(r.key);
+        lists[src] = fresh;
+        if (list.selected >= 0 || listEl.scrollTop > 0) settled = true;
+        if (settled) O.results.push(...fresh);
+        else O.results = base.concat(interleave(srcs.map(s => lists[s] || [])));
+      }
       render();
-      return;
-    }
-    if (tok !== O.tok) return;
-    for (const r of res.results) if (!O.seen.has(r.key)) { O.seen.add(r.key); O.results.push(r); }
-    for (const s of srcs) O.more[s] = !!res.more[s];
-    if (reset) O.totals = res.totals || {};
-    Object.assign(O.errors, res.errors);
-    O.via = res.via;
-    O.loading = false;
-    render();
-    if (reset && O.results.length && document.activeElement !== input) listEl.focus();
-    if (reset) prefetch(O.results.slice(0, 2));
+      if (reset && !started && O.results.length) {
+        started = true;
+        if (document.activeElement !== input) listEl.focus();
+        prefetch(O.results.slice(0, 2));
+      }
+    }));
   }
 
   const anyMore = () => Object.values(O.more).some(Boolean);
@@ -224,17 +244,15 @@ export function createOnline(ctx) {
   function sorted() {
     if (!O.sort) return O.results.slice();
     const { key, dir } = O.sort;
-    const coll = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
     return O.results.slice().sort((a, b) => {
       const x = a[key], y = b[key];
-      return (typeof x === 'number' ? x - y : coll.compare(String(x || ''), String(y || ''))) * dir;
+      return (typeof x === 'number' ? x - y : collator.compare(String(x || ''), String(y || ''))) * dir;
     });
   }
 
   function render() {
     O.view = sorted();
-    if (O.results.length && (anyMore() || O.loading)) O.view.push({ isMore: true });
-    else if (O.loading) O.view.push({ isMore: true });
+    if (O.loading || (O.results.length && anyMore())) O.view.push({ isMore: true });
     const keep = list.selected >= 0 && O.view[list.selected];
     list.setItems(O.view);
     if (keep) list.select(O.view.indexOf(keep), false);
@@ -249,7 +267,7 @@ export function createOnline(ctx) {
     const parts = [];
     const names = { freesound: 'Freesound', commons: 'Wikimedia Commons', archive: 'Internet Archive', epidemic: 'Epidemic Sound' };
     for (const [k, n] of Object.entries(O.totals)) parts.push(`${names[k] || k}: ${Number(n).toLocaleString()} match${n === 1 ? '' : 'es'}`);
-    if (O.loading) parts.push('Searching…');
+    if (O.loading) parts.push(`Still searching ${[...(O.pending || [])].map(k => names[k] || k).join(', ')}…`);
     for (const [k, msg] of Object.entries(O.errors)) parts.push(`<span class="err">${escapeHtml(names[k] || 'Search')}: ${escapeHtml(msg)}</span>`);
     const ep = O.epi;
     if (sources().includes('epidemic') && ep && !ep.hasAccountKey) parts.push(ep.hasKey
@@ -305,7 +323,7 @@ export function createOnline(ctx) {
       ? '<button class="o-save done" title="Show in Explorer">✓ Saved</button>'
       : p
         ? `<button class="o-save busy">${p.total ? Math.round((p.got / p.total) * 100) + '%' : '…'}</button>`
-        : `<button class="o-save" title="Download into ${escapeHtml(S.saveDir || 'Documents\\Soundfield Downloads')}">Save</button>`;
+        : `<button class="o-save" title="Download into ${escapeHtml(S.saveDir || defaultDir || 'Documents\\Soundfield Downloads')}">Save</button>`;
   }
 
   const itemAt = e => { const i = list.indexFromEvent(e); return i >= 0 ? [i, O.view[i]] : [-1, null]; };
@@ -365,7 +383,7 @@ export function createOnline(ctx) {
     const dl = S.downloads[r.key];
     const pickId = await api.menu([
       { id: 'play', label: 'Play' },
-      dl ? { id: 'reveal', label: 'Show saved file in Explorer' } : { id: 'save', label: 'Save to Soundfield Downloads' },
+      dl ? { id: 'reveal', label: 'Show saved file in Explorer' } : { id: 'save', label: `Save to ${destLabel()}` },
       { type: 'separator' },
       { id: 'page', label: `Open on ${r.sourceLabel}` },
       { id: 'credit', label: 'Copy credit line' },

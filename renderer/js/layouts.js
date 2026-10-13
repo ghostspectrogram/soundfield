@@ -366,6 +366,3 @@ function channelEnables(N, mute = [], solo = []) {
   return Array.from({ length: N }, (_, i) => (mute[i] ? 0 : anySolo ? (solo[i] ? 1 : 0) : 1));
 }
 
-export function formatClassLabel(cls) {
-  return { mono: 'Mono', stereo: 'Stereo', surround: 'Surround', immersive: 'Immersive', ambi: 'Ambisonic', multi: 'Multichannel', zip: 'Archive' }[cls] || cls;
-}

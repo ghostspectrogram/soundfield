@@ -240,6 +240,7 @@ export class Engine {
         f.sent += n;
       }
     } catch (err) {
+      if (this.feed !== f) return; // a read for a sound that's no longer playing
       console.error('stream error', err);
       this.emit('error', err);
       this.stop();

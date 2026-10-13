@@ -1,5 +1,5 @@
 import { Engine } from './engine.js';
-import { WaveView, fmtTime, escapeHtml } from './waveform.js';
+import { WaveView, fmtTime, fmtDb, escapeHtml } from './waveform.js';
 import { SpeakerView } from './speakers.js';
 import { VList } from './vlist.js';
 import { createOnline } from './online.js';
@@ -65,8 +65,9 @@ const S = {
 const engine = new Engine();
 const wave = new WaveView({
   wrap: $('#wave-wrap'), canvas: $('#wave'), ruler: $('#ruler'), sel: $('#sel'),
-  playhead: $('#playhead'), hover: $('#hover'), labels: $('#lanes-labels'),
+  playhead: $('#playhead'), hover: $('#hover'), labels: $('#lanes-labels'), dbscale: $('#dbscale'),
 });
+wave.on('levels', () => renderMeta());
 const speakers = new SpeakerView($('#speakers'));
 const list = new VList($('#list'), { rowHeight: 26, render: renderRow, isSelected: i => (S.multi.size ? !!S.view[i] && S.multi.has(S.view[i].path) : i === list.selected) });
 $('#list').tabIndex = 0;
@@ -204,10 +205,11 @@ function applyFilters({ keepScroll = false } = {}) {
   const searching = !!(inc.length || exc.length || cls.size || S.types.size || sr || S.dur);
   const browse = browsing() && !searching;
   const out = [];
-  for (const it of S.items) {
+  // A project only needs its own sounds looked at, not the whole library.
+  const pool = sc.type === 'proj' ? projectItems(projectById(sc.id)) : S.items;
+  for (const it of pool) {
     if (sc.type === 'fav' && !S.favorites.has(it.path)) continue;
     if (sc.type === 'dups' && (S.dupChooser || !(S.dupes && S.dupes.byPath.has(it.path)))) continue;
-    if (sc.type === 'proj' && !(S.projIndex.get(lowPath(it.path)) || []).some(p => p.id === sc.id)) continue;
     if (sc.type === 'folder') {
       if (it.lib.id !== sc.lib) continue;
       if (sc.prefix && it.folder !== sc.prefix && !it.folder.startsWith(sc.prefix + '/')) continue;
@@ -658,6 +660,11 @@ function renderMeta() {
     const codec = info ? info.codec : r.codec;
     rows.push(['Depth', bits ? `${bits}-bit ${codec === 'float' ? 'float' : 'PCM'}` : it.ext.toUpperCase()]);
     rows.push(['Length', fmtTime(info ? info.frames / info.sr : r.dur, true)]);
+    // How loud it is, measured from the waveform before you play it.
+    if (wave.levels) {
+      rows.push(['Peak', `${fmtDb(wave.levels.peak)} dBFS`]);
+      rows.push(['RMS', `${fmtDb(wave.levels.rms)} dBFS`]);
+    }
     if (info && info.mask) rows.push(['Mask', '0x' + info.mask.toString(16).toUpperCase()]);
     if (L && L.chans.length && !L.ambi) rows.push(['Order', L.chans.map(c => c.role === c.label ? c.role : c.label).join(' ')]);
   }
@@ -670,7 +677,7 @@ function renderMeta() {
     rows.push(['Source', o.sourceLabel]);
     if (it.online) {
       const dl = S.downloads[o.key];
-      rows.push(['Playing', it.path === (dl && dl.path) ? 'Your saved copy' : o.source === 'commons' || o.previewIsOriginal ? 'Original file' : 'Preview (MP3)']);
+      rows.push(['Playing', it.path === (dl && dl.path) ? 'Your saved copy' : o.previewIsOriginal ? 'Original file' : 'Preview (MP3)']);
       if (o.pack) rows.push(['Pack', o.pack]);
     } else if (o.quality === 'preview') rows.push(['Quality', 'Preview (MP3)']);
   } else {
@@ -1614,6 +1621,44 @@ $('#types').addEventListener('click', e => {
   else { S.types.clear(); S.types.add(ty); }
   applyFilters();
 });
+// Right-click a category: add every sound in it (or just the ones listed) to a project.
+$('#types').addEventListener('contextmenu', async e => {
+  e.preventDefault();
+  const s = e.target.closest('.side-item');
+  if (!s) return;
+  const ty = s.dataset.type;
+  const all = ty === '__all';
+  const label = all ? 'All sounds' : TYPE_LABELS[ty];
+  const inCat = it => !it.zip && (all || it.type === ty);
+  const items = S.items.filter(inCat);
+  const listed = S.view.filter(it => selectable(it) && inCat(it));
+  const projSub = prefix => {
+    const sub = [...S.projects].sort((a, b) => collator.compare(a.name, b.name)).map(p => ({ id: prefix + p.id, label: p.name }));
+    if (sub.length) sub.push({ type: 'separator' });
+    sub.push({ id: prefix + 'new', label: 'New project…' });
+    return sub;
+  };
+  const menu = [
+    { id: '', label: `${label}: ${items.length.toLocaleString()} sound${items.length === 1 ? '' : 's'}`, enabled: false },
+    { type: 'separator' },
+    { label: `Add all ${items.length.toLocaleString()} to project`, submenu: projSub('all:') },
+  ];
+  // A search or filter is narrowing the list: offer just what's showing too.
+  if (listed.length && listed.length !== items.length) menu.push({ label: `Add the ${listed.length.toLocaleString()} listed to project`, submenu: projSub('listed:') });
+  if (!all) menu.push({ type: 'separator' }, { id: 'show', label: `Show only ${label}` });
+  const pick = await api.menu(menu);
+  if (!pick) return;
+  if (pick === 'show') { S.types.clear(); S.types.add(ty); applyFilters(); return; }
+  const [which, id] = pick.split(':');
+  const chosen = which === 'listed' ? listed : items;
+  if (!chosen.length) return;
+  if (chosen.length > 2000) {
+    const ok = await modal({ title: `Add ${chosen.length.toLocaleString()} sounds?`, sub: `That's every sound in “${escapeHtml(label)}”. Nothing is moved or copied: the project just lists them.`, ok: 'Add them' });
+    if (!ok) return;
+  }
+  if (id === 'new') newProject(chosen);
+  else { const p = projectById(id); if (p) addToProject(p, chosen); }
+});
 document.querySelectorAll('.side-item[data-scope]').forEach(s => s.addEventListener('click', () => {
   const type = s.dataset.scope;
   S.scope = { type };
@@ -1639,7 +1684,10 @@ api.on('dupes:progress', p => {
   renderScanStatus();
 });
 api.on('scan:progress', p => {
-  if (p.phase === 'end') { S.scans.delete(p.id); if (S.dupesRaw) S.dupesRaw.stale = true; if (S.dupes) S.dupes.stale = true; }
+  if (p.phase === 'end') {
+    S.scans.delete(p.id);
+    if (p.changed !== false) { if (S.dupesRaw) S.dupesRaw.stale = true; if (S.dupes) S.dupes.stale = true; }
+  }
   else S.scans.set(p.id, p);
   renderScanStatus();
   if (p.phase === 'start' || p.phase === 'end') renderTree();
@@ -1873,7 +1921,23 @@ function saveProjects() {
 }
 
 const projectById = id => S.projects.find(p => p.id === id);
-const itemsByPath = () => { const m = new Map(); for (const it of S.items) if (!it.zip) m.set(lowPath(it.path), it); return m; };
+// Lower-case path -> item, rebuilt only when the item list changes (it's always replaced, never edited).
+let byPathCache = { items: null, map: null };
+function itemsByPath() {
+  if (byPathCache.items !== S.items) {
+    const m = new Map();
+    for (const it of S.items) if (!it.zip) m.set(lowPath(it.path), it);
+    byPathCache = { items: S.items, map: m };
+  }
+  return byPathCache.map;
+}
+// The project's sounds that are in a linked library.
+function projectItems(p) {
+  if (!p) return [];
+  const byPath = itemsByPath(), out = [];
+  for (const r of p.items) { const it = byPath.get(lowPath(r.path)); if (it) out.push(it); }
+  return out;
+}
 
 // References whose file isn't in any linked library (moved, renamed, deleted or library removed).
 function missingRefs(p, byPath = itemsByPath()) {
@@ -2119,14 +2183,43 @@ async function deleteProject(p) {
   applyFilters();
 }
 
+// Names of the search / filters currently narrowing the list.
+function activeFilters() {
+  const f = [];
+  if (S.query) f.push('the search');
+  if (S.types.size) f.push(S.types.size === 1 ? `the ${TYPE_LABELS[[...S.types][0]]} category` : 'categories');
+  if (S.classes.size) f.push('Sound Type');
+  if (S.sr) f.push('rate');
+  if (S.dur) f.push('length');
+  return f.length ? f : ['filters'];
+}
+
+// Clears the search box and every filter (category, Sound Type, rate, length).
+function clearAllFilters() {
+  S.query = '';
+  $('#search').value = '';
+  S.types.clear();
+  S.sr = '';
+  $('#f-sr').value = '';
+  S.dur = '';
+  $('#f-dur').value = '';
+  $('#dur-custom').hidden = true;
+  if (S.classes.size) $('#dd-type-menu [data-act="none"]').click(); // also redraws the Sound Type button
+  applyFilters();
+}
+
 function renderProjBanner() {
   const b = $('#proj-banner');
   const p = S.scope.type === 'proj' ? projectById(S.scope.id) : null;
   if (!p) { b.hidden = true; return; }
   b.hidden = false;
   const miss = missingRefs(p).length;
-  b.innerHTML = `<span>Project <b>${escapeHtml(p.name)}</b> · ${p.items.length.toLocaleString()} sound${p.items.length === 1 ? '' : 's'}${miss ? ` · <span class="warn">${miss} missing</span>` : ''}</span>
-    <span class="grow">${p.items.length ? '' : 'Right-click sounds → <i>Add to project</i>, drag them onto the project, or press <b>P</b> while previewing.'}</span>
+  // A search or filter still applies inside a project: say how many of its sounds it hides.
+  const listed = S.view.filter(it => !it.isMissing && !it.isFolder).length;
+  const hidden = Math.max(0, p.items.length - miss - listed);
+  b.innerHTML = `<span>Project <b>${escapeHtml(p.name)}</b> · ${p.items.length.toLocaleString()} sound${p.items.length === 1 ? '' : 's'}${miss ? ` · <span class="warn">${miss} missing</span>` : ''}${hidden ? ` · <span class="warn">${hidden.toLocaleString()} hidden by ${activeFilters().join(', ')}</span>` : ''}</span>
+    ${hidden ? '<button data-a="clearf" title="Clear the search and every filter so the whole project is listed">Show all</button>' : ''}
+    <span class="grow">${p.items.length ? '' : 'This project is empty. Right-click sounds → <i>Add to project</i>, right-click a category → <i>Add all to project</i>, drag sounds onto the project, or press <b>P</b> while previewing.'}</span>
     ${miss ? '<button data-a="relink" title="Find moved or renamed files again by name and size">Relink missing</button>' : ''}
     ${(p.exports || []).length ? '<button data-a="where" title="Open a folder or zip this project was materialized / zipped to">Show exports ▾</button>' : ''}
     <button data-a="zip" title="Pack every sound into one .zip">Zip…</button>
@@ -2134,6 +2227,7 @@ function renderProjBanner() {
   b.querySelector('[data-a=zip]').addEventListener('click', () => exportProject(p, 'zip'));
   b.querySelector('[data-a=mat]').addEventListener('click', () => exportProject(p, 'copy'));
   b.querySelector('[data-a=relink]')?.addEventListener('click', () => relinkProject(p));
+  b.querySelector('[data-a=clearf]')?.addEventListener('click', clearAllFilters);
   b.querySelector('[data-a=where]')?.addEventListener('click', async () => {
     const pick = await api.menu(exportsMenu(p));
     if (pick) openExport(p, pick);
@@ -2340,11 +2434,11 @@ function setMode(mode) {
   if (mode === 'online') onlineUI.show(); else listEl.focus();
 }
 
-const onlineUI = createOnline({ api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, fmtBytes, ipcMessage, loadOnline, saveOnline, startPlay, LIC_INFO });
+const onlineUI = createOnline({ api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, ipcMessage, loadOnline, saveOnline, LIC_INFO });
 document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 // Anything picked in the sidebar belongs to the library.
 $('#sidebar').addEventListener('click', e => {
-  if (S.mode === 'online' && e.target.closest('.side-item, .tree-row, .proj-row, .type-row')) setMode('library');
+  if (S.mode === 'online' && e.target.closest('.side-item, .tree-row, .proj-row')) setMode('library');
 }, true);
 api.on('online:progress', p => onlineUI.progress(p));
 api.on('preview:progress', p => {

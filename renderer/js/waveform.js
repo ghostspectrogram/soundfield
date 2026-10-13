@@ -1,6 +1,20 @@
 // Multichannel waveform view: one lane per channel, zoom / pan, click to
 // play from a point, drag to select, drag a selection out to a DAW.
 
+// Level scale beside the waveform: −40 … 0 dBFS.
+const DB_FLOOR = -40;
+const DB_FLOOR_LIN = 0.01; // −40 dBFS as a sample value
+const DB_MARKS = [0, -5, -10, -15, -20, -25, -30, -35, -40];
+
+// dBFS text for a linear level (1 = 0 dBFS). Float files can go above 0.
+export function fmtDb(v) {
+  if (!(v > 1e-9)) return '−∞';
+  const d = 20 * Math.log10(v);
+  if (d >= 0.05) return '+' + d.toFixed(1);
+  if (d > -0.05) return '0.0';
+  return '−' + (-d).toFixed(1);
+}
+
 const NICE_STEPS = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
 
 export function fmtTime(sec, precise = false) {
@@ -33,6 +47,7 @@ export class WaveView {
     this.peakHold = [];
     this.cb = {};
     this.message = '';
+    this.levels = null;
     new ResizeObserver(() => this.resize()).observe(this.wrap);
     this.bind();
   }
@@ -52,6 +67,7 @@ export class WaveView {
     this.v1 = this.frames;
     this.mute = [];
     this.solo = [];
+    this.levels = null;
     this.buildLabels();
     this.updateSel();
     this.draw();
@@ -59,6 +75,7 @@ export class WaveView {
 
   clear(message = '') {
     this.frames = 0;
+    this.levels = null;
     this.layout = null;
     this.peaks = null;
     this.raw = null;
@@ -79,7 +96,11 @@ export class WaveView {
     this.draw();
   }
 
-  setPeaks(p) { this.peaks = p; this.draw(); }
+  setPeaks(p) {
+    this.peaks = p;
+    if (p && p.done >= p.nb) this.computeLevels();
+    this.draw();
+  }
 
   buildLabels() {
     const L = this.layout;
@@ -94,7 +115,7 @@ export class WaveView {
       const el = document.createElement('div');
       el.className = 'lane-label';
       el.style.setProperty('--lane-color', c.color);
-      el.innerHTML = `<span class="lane-name" title="${escapeAttr(c.label)}">${escapeHtml(c.label)}</span>
+      el.innerHTML = `<span class="lane-id"><span class="lane-name" title="${escapeAttr(c.label)}">${escapeHtml(c.label)}</span><span class="lane-pk"></span></span>
         <button class="ms m" title="Mute (click) · Alt-click: unmute all">M</button>
         <button class="ms s" title="Solo (click) · Ctrl-click: solo exclusively">S</button>
         <div class="lane-meter"><div class="fill"></div></div>`;
@@ -105,6 +126,7 @@ export class WaveView {
       this.peakHold.push(0);
     });
     this.refreshMS();
+    this.showLevels();
   }
 
   toggleMS(kind, i, e) {
@@ -178,6 +200,10 @@ export class WaveView {
     this.canvas.height = Math.round(h * dpr);
     this.ruler.width = Math.round(w * dpr);
     this.ruler.height = Math.round(this.ruler.clientHeight * dpr);
+    if (this.dbscale) {
+      this.dbscale.width = Math.round(Math.max(1, this.dbscale.clientWidth) * dpr);
+      this.dbscale.height = Math.round(Math.max(1, this.dbscale.clientHeight) * dpr);
+    }
     this.updateSel();
     this.draw();
   }
@@ -194,6 +220,7 @@ export class WaveView {
     const W = cv.width, H = cv.height;
     c.clearRect(0, 0, W, H);
     this.paintRuler();
+    this.paintScale();
     if (!this.layout || !this.frames) {
       if (this.message) {
         c.fillStyle = getComputedStyle(document.body).getPropertyValue('--muted');
@@ -226,6 +253,7 @@ export class WaveView {
       c.fillStyle = 'rgba(255,255,255,0.07)';
       c.fillRect(0, Math.round(mid), W, 1);
       if (ch > 0) { c.fillStyle = 'rgba(255,255,255,0.06)'; c.fillRect(0, Math.round(y0), W, 1); }
+      this.paintGuides(c, W, mid, amp, laneH, dpr);
       c.save();
       c.beginPath();
       c.rect(0, y0, W, laneH);
@@ -239,7 +267,9 @@ export class WaveView {
 
   paintPeaks(c, ch, W, mid, amp, spp, color) {
     const p = this.peaks, d = p.data[ch], B = p.bucket, done = p.done;
-    const top = new Float32Array(W), bot = new Float32Array(W), rt = new Float32Array(W);
+    // Column buffers are reused between paints (one set, resized with the canvas).
+    if (!this.cols || this.cols.top.length !== W) this.cols = { top: new Float32Array(W), bot: new Float32Array(W), rt: new Float32Array(W) };
+    const { top, bot, rt } = this.cols;
     let last = -1;
     for (let x = 0; x < W; x++) {
       const f0 = this.v0 + x * spp, f1 = f0 + spp;
@@ -258,6 +288,7 @@ export class WaveView {
     }
     if (last < 0) return;
     const lim = last + 1;
+    for (let x = 0; x < lim; x++) { top[x] = this.amp01(top[x]); bot[x] = this.amp01(bot[x]); rt[x] = this.amp01(rt[x]); }
     c.fillStyle = withAlpha(color, 0.55);
     c.beginPath();
     c.moveTo(0, mid - top[0] * amp);
@@ -285,7 +316,8 @@ export class WaveView {
         let mn = 1e9, mx = -1e9;
         for (let f = Math.max(0, f0); f < Math.min(s.length, f1); f++) { const v = s[f]; if (v < mn) mn = v; if (v > mx) mx = v; }
         if (mn > mx) continue;
-        c.rect(x, mid - mx * amp, 1, Math.max(1, (mx - mn) * amp));
+        const tx = this.amp01(mx), tn = this.amp01(mn);
+        c.rect(x, mid - tx * amp, 1, Math.max(1, (tx - tn) * amp));
       }
       c.fill();
       return;
@@ -296,14 +328,14 @@ export class WaveView {
     c.beginPath();
     const fStart = Math.max(0, Math.floor(this.v0) - r.start), fEnd = Math.min(s.length - 1, Math.ceil(this.v1) - r.start + 1);
     for (let f = fStart; f <= fEnd; f++) {
-      const x = (r.start + f - this.v0) / spp, y = mid - s[f] * amp;
+      const x = (r.start + f - this.v0) / spp, y = mid - this.amp01(s[f]) * amp;
       if (f === fStart) c.moveTo(x, y); else c.lineTo(x, y);
     }
     c.stroke();
     if (1 / spp > 6 * dpr) {
       c.fillStyle = color;
       for (let f = fStart; f <= fEnd; f++) {
-        const x = (r.start + f - this.v0) / spp, y = mid - s[f] * amp;
+        const x = (r.start + f - this.v0) / spp, y = mid - this.amp01(s[f]) * amp;
         c.fillRect(x - 1.5 * dpr, y - 1.5 * dpr, 3 * dpr, 3 * dpr);
       }
     }
@@ -378,6 +410,115 @@ export class WaveView {
     this.sel.dataset.len = fmtTime((s.end - s.start) / this.sr, true);
   }
 
+  // ---------------------------------------------------------------- levels + dB scale
+  // Peak and RMS per channel from the finished peak data, so you can see how loud a sound
+  // is before playing it. levels = { ch: [{ peak, rms }], peak, rms } (linear, 1 = 0 dBFS).
+  computeLevels() {
+    const p = this.peaks;
+    if (!p || p.done < p.nb) return;
+    const ch = [];
+    for (let c = 0; c < p.ch; c++) {
+      const d = p.data[c];
+      if (!d) { ch.push({ peak: 0, rms: 0 }); continue; }
+      let pk = 0, sq = 0;
+      for (let b = 0; b < p.nb; b++) {
+        const k = b * 3;
+        const a = Math.max(-d[k], d[k + 1]);
+        if (a > pk) pk = a;
+        const cnt = Math.max(1, Math.min(p.bucket, p.frames - b * p.bucket));
+        sq += d[k + 2] * d[k + 2] * cnt;
+      }
+      ch.push({ peak: pk, rms: Math.sqrt(sq / Math.max(1, p.frames)) });
+    }
+    const peak = Math.max(0, ...ch.map(x => x.peak));
+    const rms = Math.sqrt(ch.reduce((t, x) => t + x.rms * x.rms, 0) / Math.max(1, ch.length));
+    this.levels = { ch, peak, rms };
+    this.showLevels();
+    this.cb.levels && this.cb.levels(this.levels);
+  }
+
+  showLevels() {
+    [...this.labels.children].forEach((el, i) => {
+      const pk = el.querySelector('.lane-pk');
+      const lv = this.levels && this.levels.ch[i];
+      if (!pk) return;
+      pk.textContent = lv ? fmtDb(lv.peak) : '';
+      pk.title = lv ? `Peak ${fmtDb(lv.peak)} dBFS · RMS ${fmtDb(lv.rms)} dBFS` : '';
+      pk.classList.toggle('hot', !!lv && lv.peak >= 0.891); // −1 dBFS or louder
+    });
+  }
+
+  // Vertical position (0 … 1 of the half-lane) for a sample value: the lane runs from
+  // −40 dBFS at the centre line to 0 dBFS at the edge, so the dB scale is even.
+  amp01(v) {
+    const a = v < 0 ? -v : v;
+    if (a <= DB_FLOOR_LIN) return 0;
+    const t = Math.min(1, (20 * Math.log10(a) - DB_FLOOR) / -DB_FLOOR);
+    return v < 0 ? -t : t;
+  }
+  dbOffset(db) { return (db - DB_FLOOR) / -DB_FLOOR; }
+
+  // dBFS marks for each lane (−40 … 0), matching the waveform and its vertical zoom;
+  // a marker shows each channel's peak.
+  paintScale() {
+    const cv = this.dbscale;
+    if (!cv) return;
+    const c = cv.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.width, H = cv.height;
+    c.clearRect(0, 0, W, H);
+    if (!this.layout || !this.frames) return;
+    const n = this.layout.ch, laneH = H / n;
+    c.font = `${9.5 * dpr}px ui-monospace, Consolas, monospace`;
+    c.textAlign = 'right';
+    c.textBaseline = 'middle';
+    for (let ch = 0; ch < n; ch++) {
+      const y0 = ch * laneH, mid = y0 + laneH / 2;
+      const amp = (laneH / 2 - 2 * dpr) * this.vzoom;
+      if (ch > 0) { c.fillStyle = 'rgba(255,255,255,0.06)'; c.fillRect(0, Math.round(y0), W, 1); }
+      // Labels at one fixed step for the whole lane (every 5, 10 or 20 dB), so the scale is always even.
+      const per5 = (5 / -DB_FLOOR) * amp; // pixels between 5 dB marks
+      const step = per5 >= 11 * dpr ? 5 : per5 * 2 >= 11 * dpr ? 10 : 20;
+      for (const db of DB_MARKS) {
+        const off = this.dbOffset(db) * amp;
+        if (off > laneH / 2 - 1 * dpr) continue; // above the lane at this zoom
+        const yt = Math.round(mid - off), yb = Math.round(mid + off);
+        const major = db % step === 0;
+        c.fillStyle = major ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.18)';
+        c.fillRect(W - (major ? 5 : 3) * dpr, yt, (major ? 5 : 3) * dpr, 1);
+        c.fillRect(W - (major ? 5 : 3) * dpr, yb, (major ? 5 : 3) * dpr, 1);
+        if (major) {
+          c.fillStyle = db === 0 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.5)';
+          c.fillText(db === 0 ? '0' : '−' + -db, W - 7 * dpr, Math.max(y0 + 6 * dpr, yt));
+        }
+      }
+      // This channel's peak.
+      const lv = this.levels && this.levels.ch[ch];
+      if (lv && lv.peak > DB_FLOOR_LIN) {
+        const off = Math.min(laneH / 2 - 1 * dpr, this.amp01(lv.peak) * amp);
+        c.fillStyle = lv.peak >= 0.891 ? '#fc8181' : this.layout.chans[ch].color;
+        for (const y of [mid - off, mid + off]) {
+          c.beginPath();
+          c.moveTo(W - 6 * dpr, y - 3 * dpr); c.lineTo(W, y); c.lineTo(W - 6 * dpr, y + 3 * dpr);
+          c.closePath();
+          c.fill();
+        }
+      }
+    }
+  }
+
+  // Faint level guides across the waveform at the same dB marks.
+  paintGuides(c, W, mid, amp, laneH, dpr) {
+    c.fillStyle = 'rgba(255,255,255,0.035)';
+    for (const db of DB_MARKS) {
+      if (db === DB_FLOOR) continue; // that's the centre line
+      const off = this.dbOffset(db) * amp;
+      if (off > laneH / 2 - 1 * dpr) continue;
+      c.fillRect(0, Math.round(mid - off), W, 1);
+      c.fillRect(0, Math.round(mid + off), W, 1);
+    }
+  }
+
   // ---------------------------------------------------------------- input
   bind() {
     const wrap = this.wrap;
@@ -433,7 +574,6 @@ export class WaveView {
       const x = xOf(e);
       if (e.altKey) {
         this.vzoom = Math.max(1, Math.min(32, this.vzoom * (e.deltaY < 0 ? 1.25 : 0.8)));
-        this.cb.vzoom && this.cb.vzoom(this.vzoom);
         this.draw();
       } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
         const d = (e.shiftKey ? e.deltaY : e.deltaX) / this.W * (this.v1 - this.v0);

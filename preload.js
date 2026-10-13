@@ -46,6 +46,13 @@ contextBridge.exposeInMainWorld('api', {
     set: s => ipcRenderer.invoke('epidemic:set', s),
     check: () => ipcRenderer.invoke('epidemic:check'),
   },
+  // Preferences: read once at startup (null = never saved here yet), saved in the app's data folder.
+  settings: {
+    load: () => ipcRenderer.sendSync('settings:getSync'),
+    save: prefs => ipcRenderer.send('settings:save', prefs),
+  },
+  appInfo: () => ipcRenderer.invoke('app:info'),
+  openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
   openExternal: url => ipcRenderer.invoke('open:external', url),
   exists: p => ipcRenderer.invoke('file:exists', p),
   on: (channel, cb) => {

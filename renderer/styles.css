@@ -539,6 +539,16 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 #o-empty .empty-card { max-width: 470px; }
 #o-empty b { color: var(--text); }
 .modal-card.wide { width: min(560px, calc(100vw - 32px)); }
+.brand { cursor: pointer; }
+.modal-card .about { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 4px 0 14px; font-size: 12.5px; }
+.modal-card .about dt { color: var(--dim); }
+.modal-card .about dd { margin: 0; color: var(--text); user-select: text; overflow-wrap: anywhere; }
+.modal-card .wn-h { margin: 0 0 6px; color: var(--dim); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; }
+.modal-card .wn-list { max-height: min(52vh, 420px); overflow-y: auto; padding-right: 4px; }
+.modal-card .wn + .wn { margin-top: 12px; }
+.modal-card .wn-v { font-weight: 650; color: var(--accent); font-size: 13px; }
+.modal-card .wn-v span { margin-left: 8px; color: var(--dim); font-weight: 400; font-size: 11.5px; }
+.modal-card .wn ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
 .modal-card .field { display: block; margin: 0 0 10px; }
 .modal-card .field span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
 .modal-card .field input { width: 100%; height: 30px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); outline: none; user-select: text; font-family: Consolas, monospace; font-size: 12.5px; }

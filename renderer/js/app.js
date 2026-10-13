@@ -6,18 +6,23 @@ import { createOnline } from './online.js';
 import { createSource } from './sources.js';
 import { detectLayout, layoutChoices } from './layouts.js';
 import { metaCategory, TYPES, TYPE_LABELS } from '../../shared/categorize.mjs';
+import { RELEASES, unseenReleases } from './whats-new.js';
 
 const $ = s => document.querySelector(s);
 const api = window.api;
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 // ------------------------------------------------------------------ prefs
+// Kept in settings.json in the app's data folder. Older versions kept them in browser storage:
+// those are moved over the first time this version starts.
+const savedPrefs = (() => { try { return window.api.settings.load(); } catch { return null; } })();
 const prefs = Object.assign(
   { volume: -6, autoplay: true, loop: false, monitor: 'stereo', lfe: false, playerH: 330, sort: { key: 'name', dir: 1 }, expanded: [] },
-  safeJson(() => localStorage.getItem('sf.prefs')),
+  savedPrefs || safeJson(() => localStorage.getItem('sf.prefs')),
 );
-function savePrefs() { try { localStorage.setItem('sf.prefs', JSON.stringify(prefs)); } catch {} }
+function savePrefs() { try { window.api.settings.save(prefs); } catch {} }
 function safeJson(fn) { try { return JSON.parse(fn()) || {}; } catch { return {}; } }
+if (!savedPrefs) savePrefs();
 
 // ------------------------------------------------------------------ state
 const S = {
@@ -2088,11 +2093,12 @@ function relinkProject(p) {
 }
 
 // Small modal dialog. fields: HTML; resolves with the card element (to read inputs) or null.
-function modal({ title, sub = '', body = '', ok = 'OK', okClass = 'primary' }) {
+// cancel: null leaves out the Cancel button (for notices with a single Close / OK).
+function modal({ title, sub = '', body = '', ok = 'OK', okClass = 'primary', cancel = 'Cancel' }) {
   return new Promise(resolve => {
     const m = $('#modal');
     m.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true"><h3>${escapeHtml(title)}</h3>${sub ? `<p class="sub">${sub}</p>` : ''}${body}
-      <div class="modal-actions"><button data-a="cancel">Cancel</button><button data-a="ok" class="${okClass}">${escapeHtml(ok)}</button></div></div>`;
+      <div class="modal-actions">${cancel === null ? '' : `<button data-a="cancel">${escapeHtml(cancel)}</button>`}<button data-a="ok" class="${okClass}">${escapeHtml(ok)}</button></div></div>`;
     m.hidden = false;
     const card = m.querySelector('.modal-card');
     const close = val => { m.hidden = true; m.innerHTML = ''; document.removeEventListener('keydown', onKey, true); resolve(val); };
@@ -2103,7 +2109,7 @@ function modal({ title, sub = '', body = '', ok = 'OK', okClass = 'primary' }) {
     };
     document.addEventListener('keydown', onKey, true);
     m.addEventListener('mousedown', e => { if (e.target === m) close(null); }, { once: true });
-    card.querySelector('[data-a=cancel]').addEventListener('click', () => close(null));
+    card.querySelector('[data-a=cancel]')?.addEventListener('click', () => close(null));
     card.querySelector('[data-a=ok]').addEventListener('click', () => close(card));
     card.querySelector('[data-a=ok]').focus();
   });
@@ -2456,6 +2462,54 @@ function toast(msg, ms = 2600) {
   toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
+// ------------------------------------------------------------------ about + what's new
+const releaseHtml = rs => rs.map(r => `<div class="wn"><div class="wn-v">${escapeHtml(r.version)}<span>${escapeHtml(r.date)}</span></div>
+  <ul>${r.items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul></div>`).join('');
+
+let appInfo = null;
+const getAppInfo = async () => (appInfo ||= await api.appInfo().catch(() => null));
+
+async function showAbout() {
+  const info = await getAppInfo() || {};
+  const built = info.builtAt ? new Date(info.builtAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Not a packaged build (running from the source folder)';
+  const card = modal({
+    title: 'About Soundfield',
+    body: `<dl class="about">
+        <dt>Version</dt><dd>${escapeHtml(info.version || '?')}</dd>
+        <dt>Built</dt><dd>${escapeHtml(built)}</dd>
+        ${info.commit ? `<dt>Code</dt><dd>${escapeHtml(info.commit)}</dd>` : ''}
+        <dt>Data folder</dt><dd>${escapeHtml(info.dataDir || '')} · <a data-x="data">Open</a></dd>
+        <dt>Project</dt><dd><a data-x="gh">github.com/ghostspectrogram/soundfield</a></dd>
+      </dl>
+      <h4 class="wn-h">What’s new</h4><div class="wn-list">${releaseHtml(RELEASES)}</div>`,
+    ok: 'Close', cancel: null,
+  });
+  const el = document.querySelector('#modal .modal-card');
+  el.classList.add('wide');
+  el.addEventListener('click', e => {
+    const x = e.target.closest('[data-x]');
+    if (!x) return;
+    if (x.dataset.x === 'data') api.openDataDir();
+    else if (x.dataset.x === 'gh') api.openExternal('https://github.com/ghostspectrogram/soundfield');
+  });
+  await card;
+}
+$('.brand').addEventListener('click', showAbout);
+$('.brand').title = 'About Soundfield: version and what’s new';
+
+// Once per update: what changed since the version you last opened.
+async function showWhatsNew() {
+  const info = await getAppInfo();
+  if (!info || prefs.lastSeenVersion === info.version) return;
+  const rs = unseenReleases(prefs.lastSeenVersion).filter(r => r.items.length);
+  prefs.lastSeenVersion = info.version;
+  savePrefs();
+  if (!rs.length) return;
+  const card = modal({ title: `What’s new in Soundfield ${info.version}`, body: `<div class="wn-list">${releaseHtml(rs)}</div>`, ok: 'Got it', cancel: null });
+  document.querySelector('#modal .modal-card').classList.add('wide');
+  await card;
+}
+
 // ------------------------------------------------------------------ boot
 async function boot() {
   setVolume(prefs.volume, false);
@@ -2489,7 +2543,9 @@ async function boot() {
   applyFilters();
   if (S.libs.length) listEl.focus();
   if (prefs.mode === 'online') setMode('online');
-  window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, openFolder, goUp, folderChain, excludingFolder, extraCopies,
-    addToProject, removeFromProject, relinkProject, openProject, projectById, exportProject, renderProjects, saveProjects, setMode, onlineUI, loadOnline }; // handy for debugging (F12)
+  window.__sf = { S, engine, wave, selectIndex, applyFilters, setDupExcluded, prefs, savePrefs, openFolder, goUp, folderChain, excludingFolder, extraCopies,
+    addToProject, removeFromProject, relinkProject, openProject, projectById, exportProject, renderProjects, saveProjects, setMode, onlineUI, loadOnline,
+    findDupes, showAbout, bootMs: Math.round(performance.now()) }; // handy for debugging (F12) and used by tools/test.js
+  showWhatsNew();
 }
 boot();

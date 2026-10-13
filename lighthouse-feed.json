@@ -12,5 +12,6 @@
   {"id": "category-to-project", "title": "Add a whole category to a project", "summary": "Right-click a category to add every sound in it, or only the ones currently listed, to a project.", "date": "2026-10-12"},
   {"id": "db-scale-levels", "title": "dB scale and loudness readout on the waveform", "summary": "An even -40 to 0 dBFS scale sits beside the waveform, with each channel's peak and RMS shown before you press play.", "date": "2026-10-12"},
   {"id": "streaming-online-results", "title": "Online results appear as each site answers", "summary": "Search results show up from the fastest site first instead of waiting for the slowest, and a site that stalls times out with a clear message.", "date": "2026-10-12"},
-  {"id": "fast-commons-previews", "title": "Fast previews of big Commons recordings", "summary": "Large Wikimedia Commons WAV / FLAC files are previewed through a small MP3 copy, while Save still downloads the original.", "date": "2026-10-12"}
+  {"id": "fast-commons-previews", "title": "Fast previews of big Commons recordings", "summary": "Large Wikimedia Commons WAV / FLAC files are previewed through a small MP3 copy, while Save still downloads the original.", "date": "2026-10-12"},
+  {"id": "about-and-whats-new", "title": "About window and What's new after each update", "summary": "Click the app name to see the version, build date and release notes; after an update, a short note shows what changed, once.", "date": "2026-10-13"}
 ]}

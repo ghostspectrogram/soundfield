@@ -17,7 +17,19 @@ npm start
 If `npm start` says Electron failed to install, newer npm versions sometimes skip Electron's download step. Run `node node_modules/electron/install.js` once, then `npm start` again.
 
 ### Standalone app (Windows)
-`npm run build` packages `Soundfield.exe` into `dist/`, installs it to `%LOCALAPPDATA%\Programs\Soundfield`, and points the Start menu shortcut at it. Close Soundfield before rebuilding (Windows locks a running exe), or use `npm run build -- --wait` to install as soon as it closes. Libraries, projects and settings live in `%APPDATA%\Soundfield`, so they carry over between builds. `npm run build -- --no-install` only packages.
+`npm run build` packages `Soundfield.exe` into `dist/`, installs it to `%LOCALAPPDATA%\Programs\Soundfield`, and points the Start menu shortcut at it. Close Soundfield before rebuilding (Windows locks a running exe), or use `npm run build -- --wait` to install as soon as it closes. Libraries, projects and settings (`settings.json`) live in `%APPDATA%\Soundfield`, so they carry over between builds. `npm run build -- --no-install` only packages.
+
+Each build records its version, build time and commit; click the **Soundfield** name at the top left to see them, along with the release notes (also shown once after each update). Release notes live in `renderer/js/whats-new.js`; bump `version` in `package.json` and add an entry there for every release.
+
+### Tests
+- `npm test` generates a small test library (tones with known levels in mono, stereo, 5.1, ambisonic, float, AIFF, a zip and a duplicate). It runs Soundfield hidden against it and checks:
+  - scanning, layouts and search;
+  - exact peak levels;
+  - playback while switching sounds quickly;
+  - projects and duplicates;
+  - that preferences survive a restart.
+- `npm test -- --perf` times startup, filtering, search and project views on a *copy* of your real library index; no audio is read. Add `--save-baseline` to remember the result, and later runs flag anything more than 25% slower. The baseline is per machine and not committed.
+- Neither touches your own data.
 
 The app icon lives in `build/icon.ico` / `build/icon.png`. It's drawn by `tools/make-icon.js`; run `npm run icon` to regenerate it after tweaking the design.
 
@@ -34,6 +46,8 @@ The app icon lives in `build/icon.ico` / `build/icon.png`. It's drawn by `tools/
 | `renderer/js/engine.js`, `renderer/worklet/player.js` | Streaming multichannel playback engine (AudioWorklet), one AudioContext per sample rate |
 | `renderer/js/waveform.js`, `renderer/js/speakers.js` | Multichannel waveform view and top-down speaker / ambisonic intensity map |
 | `renderer/js/app.js` | The explorer UI |
+| `renderer/js/whats-new.js` | Release notes for About and the "What's new" note |
+| `tools/build.js`, `tools/test.js` | Standalone build + install, and the test / speed runs (`tools/fixtures.js` makes the test library) |
 
 ## Using it in another project (e.g. a DAW)
 Add it as a dependency straight from GitHub:

@@ -18,6 +18,8 @@ const KEEP = new Set(['main.js', 'preload.js', 'package.json', 'lib', 'shared', 
 async function main() {
   const { packager } = await import('@electron/packager');
   console.log(`Packaging Soundfield ${pkg.version}…`);
+  // Windows version fields only take numbers: "0.2.0-beta.1" is stamped as 0.2.0.<minutes>.
+  const numeric = pkg.version.split('-')[0];
   const [outDir] = await packager({
     dir: ROOT,
     out: path.join(ROOT, 'dist'),
@@ -31,8 +33,8 @@ async function main() {
     prune: true,
     quiet: true,
     ignore: rel => rel !== '' && !KEEP.has(rel.split('/')[1]),
-    appVersion: pkg.version,
-    buildVersion: `${pkg.version}.${Math.floor(Date.now() / 1000 / 60) % 65535}`,
+    appVersion: numeric,
+    buildVersion: `${numeric}.${Math.floor(Date.now() / 1000 / 60) % 65535}`,
     win32metadata: {
       CompanyName: 'Soundfield',
       ProductName: 'Soundfield',
@@ -40,7 +42,14 @@ async function main() {
       OriginalFilename: 'Soundfield.exe',
     },
   });
-  console.log('Built', path.join(outDir, 'Soundfield.exe'));
+  // Version, build time and commit for Soundfield's About window ("+" = built with uncommitted changes).
+  let commit = '';
+  try {
+    commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+    if (execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: ROOT, encoding: 'utf8' }).trim()) commit += '+';
+  } catch {}
+  fs.writeFileSync(path.join(outDir, 'resources', 'app', 'build-info.json'), JSON.stringify({ version: pkg.version, builtAt: new Date().toISOString(), commit }));
+  console.log('Built', path.join(outDir, 'Soundfield.exe'), `(${pkg.version}${commit ? ', ' + commit : ''})`);
   if (process.argv.includes('--no-install')) return;
 
   // Swap the new build into place. Windows locks a running exe's folder, so a rename fails while it's open.

@@ -288,6 +288,39 @@ function getDragIcon() {
   return dragIcon;
 }
 
+// ------------------------------------------------------------------ settings + app info
+// Preferences live in settings.json in the app's data folder ({ prefs: {...} }), so they
+// survive browser-storage wipes and can be backed up. Saves are batched.
+let settings = null;
+let settingsTimer = null, settingsDirty = false;
+function loadSettings() {
+  if (!settings) settings = store.settings() || { prefs: null };
+  return settings;
+}
+function flushSettings() {
+  clearTimeout(settingsTimer);
+  if (!settingsDirty) return;
+  settingsDirty = false;
+  store.saveSettings(settings);
+}
+
+// Version, build date and commit. Packaged builds carry build-info.json, written by tools/build.js.
+let appInfo = null;
+function getAppInfo() {
+  if (appInfo) return appInfo;
+  let b = {};
+  try { b = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')); } catch {}
+  appInfo = {
+    version: b.version || require('./package.json').version,
+    builtAt: b.builtAt || null,
+    commit: b.commit || '',
+    dev: !b.builtAt,
+    electron: process.versions.electron,
+    dataDir: app.getPath('userData'),
+  };
+  return appInfo;
+}
+
 function regionDir() {
   return path.join(app.getPath('documents'), 'Soundfield Regions');
 }
@@ -548,6 +581,18 @@ function registerIpc() {
   }));
 
   ipcMain.handle('clipboard:write', (e, text) => { clipboard.writeText(String(text)); return true; });
+
+  // The renderer reads its preferences synchronously at startup, before anything is drawn.
+  ipcMain.on('settings:getSync', e => { e.returnValue = loadSettings().prefs; });
+  ipcMain.on('settings:save', (e, prefs) => {
+    if (!prefs || typeof prefs !== 'object') return;
+    loadSettings().prefs = prefs;
+    settingsDirty = true;
+    clearTimeout(settingsTimer);
+    settingsTimer = setTimeout(flushSettings, 400);
+  });
+  ipcMain.handle('app:info', () => getAppInfo());
+  ipcMain.handle('app:openDataDir', () => shell.openPath(app.getPath('userData')));
 
   ipcMain.on('drag:start', async (e, p, region) => {
     if (Array.isArray(p)) { // several selected sounds
@@ -910,9 +955,10 @@ app.whenReady().then(async () => {
 
   // Quietly pick up added / changed / removed files after the UI is up.
   win.webContents.once('did-finish-load', () => {
-    setTimeout(() => libraries.forEach(l => queueScan(l.id)), 1500);
+    if (!process.env.SF_NO_SCAN) setTimeout(() => libraries.forEach(l => queueScan(l.id)), 1500); // SF_NO_SCAN: speed tests on a copy of the index
     setTimeout(() => prunePreviews(true), 8000);
   });
 });
 
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', flushSettings);

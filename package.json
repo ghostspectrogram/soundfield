@@ -1,7 +1,7 @@
 {
   "name": "soundfield",
   "productName": "Soundfield",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "description": "Fast sound effects library explorer built for surround and immersive audio.",
   "main": "main.js",
   "private": true,
@@ -27,7 +27,8 @@
   "scripts": {
     "start": "electron .",
     "icon": "node tools/make-icon.js",
-    "build": "node tools/build.js"
+    "build": "node tools/build.js",
+    "test": "node tools/test.js"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

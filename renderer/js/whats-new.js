@@ -2,6 +2,13 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.11',
+    date: '2026-11-05',
+    items: [
+      'Fixed: with the Online length filter on, you had to load more results one click at a time. Freesound now sends only sounds of that length, and Soundfield loads more pages by itself until the list fills up. The count shows how many are that length.',
+    ],
+  },
+  {
     version: '0.2.0-beta.10',
     date: '2026-11-05',
     items: [

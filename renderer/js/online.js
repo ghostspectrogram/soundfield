@@ -183,7 +183,14 @@ export function createOnline(ctx) {
   const OD = { range: null }; // [min, max] in seconds (this session)
   const durSel = $('#o-dur'), durMin = $('#o-dur-min'), durMax = $('#o-dur-max');
   durSel.innerHTML = $('#f-dur').innerHTML;
-  const setRange = (a, b) => { OD.range = a == null && b == null ? null : [a ?? 0, b ?? Infinity]; render(); };
+  // A new range searches again, so Freesound (which filters length itself) sends only matching sounds.
+  const setRange = (a, b) => {
+    const next = a == null && b == null ? null : [a ?? 0, b ?? Infinity];
+    if (String(next) === String(OD.range)) return;
+    OD.range = next;
+    if (O.query && !web()) runSearch(true); else render();
+  };
+  const durReq = () => (OD.range ? [OD.range[0], Number.isFinite(OD.range[1]) ? OD.range[1] : null] : null);
   function applyCustomDur() {
     const a = ctx.parseLength(durMin.value), b = ctx.parseLength(durMax.value);
     durMin.classList.toggle('bad', Number.isNaN(a));
@@ -261,7 +268,9 @@ export function createOnline(ctx) {
     return out;
   };
 
-  async function runSearch(reset) {
+  // auto: a page loaded by itself because the length filter left the list short (see the end).
+  async function runSearch(reset, auto = false) {
+    if (!auto) O.autoPages = 0;
     const q = reset ? input.value.trim() : O.query;
     if (!q) return;
     if (O.loading && !reset) return;
@@ -284,7 +293,7 @@ export function createOnline(ctx) {
     render();
     await Promise.all(srcs.map(async src => {
       let res = null;
-      try { res = await api.online.search({ query: q, page, sources: [src], licenses: ['cc0', 'pd'], types, kind: music() ? 'music' : 'sfx' }); }
+      try { res = await api.online.search({ query: q, page, sources: [src], licenses: ['cc0', 'pd'], types, kind: music() ? 'music' : 'sfx', dur: durReq() }); }
       catch (err) { if (tok === O.tok) O.errors[src] = ipcMessage(err); }
       if (tok !== O.tok) return;
       O.pending.delete(src);
@@ -308,6 +317,12 @@ export function createOnline(ctx) {
         prefetch(O.results.slice(0, 2));
       }
     }));
+    // The other sites can't filter by length, so few of their sounds may match. Keep loading
+    // (up to 6 pages each time you search or scroll) until there's more than a screenful.
+    if (tok === O.tok && OD.range && anyMore() && O.autoPages < 6 && O.view.filter(r => !r.isMore).length < 40) {
+      O.autoPages++;
+      runSearch(false, true);
+    }
   }
 
   const anyMore = () => Object.values(O.more).some(Boolean);
@@ -330,7 +345,8 @@ export function createOnline(ctx) {
     list.setItems(O.view);
     if (keep) list.select(O.view.indexOf(keep), false);
     $('#o-empty').hidden = !!O.query || web();
-    $('#o-count').textContent = O.query ? `${O.results.length.toLocaleString()}${anyMore() ? '+' : ''} found` : '';
+    const shown = OD.range ? `${O.view.filter(r => !r.isMore).length.toLocaleString()} this length · ` : '';
+    $('#o-count').textContent = O.query ? `${shown}${O.results.length.toLocaleString()}${anyMore() ? '+' : ''} found` : '';
     renderStatus();
   }
 

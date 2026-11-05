@@ -142,9 +142,9 @@ export function createOnline(ctx) {
 
   // ---------------------------------------------------------------- Sound effects / Music
   // Music searches the same free sites for CC0 / public-domain music, with Key and BPM columns.
-  // Epidemic Sound and Team SFX are sound effects only here.
+  // Epidemic Sound has music too (your subscription); Team SFX is sound effects only here.
   const music = () => prefs.onlineKind === 'music';
-  const SFX_ONLY = ['epidemic', 'teamsfx'];
+  const SFX_ONLY = ['teamsfx'];
   const MO = { bpm: null, key: '' }; // Music filters (this session)
   function applyKind() {
     const m = music();
@@ -225,11 +225,11 @@ export function createOnline(ctx) {
     $('#o-mode-hint').textContent = w
       ? 'Sound sites that open your search in your browser. Hover a site for its licence terms.'
       : music()
-        ? 'CC0 and public-domain music you can preview and save, no credit needed. Saved music goes in a Music folder and is sorted as Musical.'
+        ? 'CC0 and public-domain music you can preview and save, no credit needed, and Epidemic Sound music through your subscription. Saved music goes in a Music folder and is sorted as Musical.'
         : 'Sounds you can preview here and save straight into Soundfield, no credit needed: CC0, public domain, and Epidemic Sound through your subscription.';
     $('#o-empty h2').textContent = music() ? 'Find free music' : 'Find free sound effects';
     $('#o-empty p').innerHTML = music()
-      ? 'Search Freesound, Wikimedia Commons and the Internet Archive for CC0 and public-domain music: use it in anything, including paid work, with no credit needed. Key and BPM show when the title, tags or the site give them. <b>Save</b> puts it in a Music folder in your save folder and notes where it came from in <i>Credits.txt</i>.'
+      ? 'Search Freesound, Wikimedia Commons and the Internet Archive for CC0 and public-domain music: use it in anything, including paid work, with no credit needed. Epidemic Sound music is there too, through your subscription. Key and BPM show when the title, tags or the site give them. <b>Save</b> puts it in a Music folder in your save folder and notes where it came from in <i>Credits.txt</i>.'
       : O.emptyHtml;
     input.placeholder = w ? 'Search sound sites…  e.g.  bees' : music() ? 'Search free music, then press Enter…  e.g.  lofi piano' : 'Search free sound effects, then press Enter…  e.g.  bees';
     $('#o-web').hidden = !w;
@@ -275,7 +275,7 @@ export function createOnline(ctx) {
     if (!q) return;
     if (O.loading && !reset) return;
     const srcs = (reset ? sources() : Object.keys(O.more).filter(k => O.more[k])).filter(s => !music() || !SFX_ONLY.includes(s));
-    if (!srcs.length) { if (reset) toast(music() ? 'Pick Freesound, Wikimedia Commons or Internet Archive for music (Sources ▾).' : 'Pick at least one source (Sources ▾).'); return; }
+    if (!srcs.length) { if (reset) toast(music() ? 'Pick Freesound, Wikimedia Commons, Internet Archive or Epidemic Sound for music (Sources ▾).' : 'Pick at least one source (Sources ▾).'); return; }
     if (!fileTypes().length) { if (reset) toast('Pick at least one file type (File type ▾).'); return; }
     if (reset) {
       Object.assign(O, { query: q, page: 1, results: [], seen: new Set(), more: {}, errors: {}, totals: {} });

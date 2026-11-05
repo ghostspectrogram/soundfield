@@ -1114,13 +1114,13 @@ function publicEpi(s = epiSettings()) {
 
 // Signed file URLs, per sound and format, reused for a while within the session.
 const epiUrls = new Map(); // `${id}|${fileType}` -> { url, at }
-async function epiFileUrl(id, fileType) {
+async function epiFileUrl(id, fileType, recording = false) {
   const { accountKey } = epiSettings();
   if (!accountKey) throw new Error('Add your Epidemic account key to listen and save (the Epidemic button at the top).');
-  const k = `${id}|${fileType}`;
+  const k = `${id}|${fileType}|${recording ? "rec" : "sfx"}`;
   const hit = epiUrls.get(k);
   if (hit && Date.now() - hit.at < 20 * 60 * 1000) return hit.url;
-  const url = await online.epidemicAssetUrl(id, fileType, accountKey);
+  const url = await online.epidemicAssetUrl(id, fileType, accountKey, recording);
   epiUrls.set(k, { url, at: Date.now() });
   return url;
 }
@@ -1244,7 +1244,7 @@ function fetchPreview(r) {
   };
   const get = async () => {
     // Epidemic results from the developer key carry no preview link; one is asked for with the account key.
-    const url = r.source === 'epidemic' && !r.previewUrl ? await epiFileUrl(r.id, 'MP3') : r.source === 'teamsfx' ? teamsfx.fileUrl(r.id) : r.previewUrl;
+    const url = r.source === 'epidemic' && !r.previewUrl ? await epiFileUrl(r.id, 'MP3', !!r.recording) : r.source === 'teamsfx' ? teamsfx.fileUrl(r.id) : r.previewUrl;
     if (!/^https:\/\//.test(url || '') && !teamsfx.isServiceUrl(url)) throw new Error('No preview available');
     const hint = previewSizeHint(r);
     const headers = r.source === 'teamsfx' ? teamsfx.authHeaders(teamKey()) : {};
@@ -1282,7 +1282,7 @@ function registerOnlineIpc() {
     // Already saved in this folder: nothing to do. Saved somewhere else: save another copy here.
     if (known && fs.existsSync(known.path) && path.dirname(known.path).toLowerCase() === dir.toLowerCase()) return { ...known, already: true };
     let url = r.previewUrl, ext = r.previewExt || 'mp3', headers = {}, quality = 'preview';
-    if (r.source === 'epidemic') { url = await epiFileUrl(r.id, 'WAV'); quality = 'original'; ext = 'wav'; } // your subscription, via the MCP server
+    if (r.source === 'epidemic') { url = await epiFileUrl(r.id, 'WAV', !!r.recording); quality = 'original'; ext = 'wav'; } // your subscription, via the MCP server
     else if (r.source === 'teamsfx') { url = teamsfx.fileUrl(r.id); headers = teamsfx.authHeaders(teamKey()); quality = 'original'; ext = r.ext; }
     else if (r.downloadUrl) { url = r.downloadUrl; quality = 'original'; ext = r.ext; } // Wikimedia Commons / Internet Archive original file
     else if (r.source === 'freesound' && r.original) {

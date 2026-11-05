@@ -2,6 +2,15 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.12',
+    date: '2026-11-05',
+    items: [
+      'Online → Music now includes Epidemic Sound music, through your Epidemic account key: preview, save the full mix as WAV, with the artist and real BPM. Pick Epidemic Sound under Sources.',
+      'The length filter works with Epidemic music too, so you only get tracks of that length.',
+      'Epidemic sound effects can’t be filtered by length on Epidemic’s side (their search breaks when a minimum length is set), so Soundfield sorts them out itself. Long Epidemic sound effects are rare.',
+    ],
+  },
+  {
     version: '0.2.0-beta.11',
     date: '2026-11-05',
     items: [

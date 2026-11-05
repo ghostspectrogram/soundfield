@@ -2,6 +2,13 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.13',
+    date: '2026-11-05',
+    items: [
+      'Fixed: some Epidemic searches, like door and wind, always failed with an error. A few sounds in Epidemic’s catalogue are broken on their side and broke the whole page. Soundfield now leaves out just those sounds and shows the rest.',
+    ],
+  },
+  {
     version: '0.2.0-beta.12',
     date: '2026-11-05',
     items: [

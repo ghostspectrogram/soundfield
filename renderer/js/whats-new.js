@@ -2,6 +2,13 @@
 // Each version's entry lists what someone using Soundfield will notice, in plain words.
 export const RELEASES = [
   {
+    version: '0.2.0-beta.10',
+    date: '2026-11-05',
+    items: [
+      'Online search can filter by length: the same length menu as your library (Under 1 s, 1 – 10 s, … or Custom range), next to Sound effects / Music. Results with no known length are hidden while it’s on.',
+    ],
+  },
+  {
     version: '0.2.0-beta.9',
     date: '2026-10-13',
     items: [

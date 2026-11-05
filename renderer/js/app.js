@@ -2890,7 +2890,7 @@ function setMode(mode) {
   if (mode === 'online') onlineUI.show(); else listEl.focus();
 }
 
-const onlineUI = createOnline({ api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, fmtBytes, ipcMessage, loadOnline, saveOnline, LIC_INFO, previewBytes });
+const onlineUI = createOnline({ api, S, prefs, savePrefs, toast, modal, escapeHtml, fmtTime, fmtBytes, ipcMessage, loadOnline, saveOnline, LIC_INFO, previewBytes, parseLength });
 document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 // Anything picked in the sidebar belongs to the library.
 $('#sidebar').addEventListener('click', e => {

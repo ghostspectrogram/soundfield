@@ -196,6 +196,12 @@
           <button data-okind="sfx" class="on" role="tab">Sound effects</button>
           <button data-okind="music" role="tab">Music</button>
         </div>
+        <select id="o-dur" title="Filter by length"></select>
+        <div id="o-dur-custom" class="dur-custom" hidden>
+          <input id="o-dur-min" type="text" placeholder="from" title="Shortest length, e.g. 30, 1:30 or 10m (empty = no minimum)" spellcheck="false">
+          <span>–</span>
+          <input id="o-dur-max" type="text" placeholder="to" title="Longest length, e.g. 90, 4:00 or 20m (empty = no maximum)" spellcheck="false">
+        </div>
         <div id="o-music-filters" class="dur-custom" hidden>
           <input id="o-bpm" type="text" placeholder="BPM" title="Tempo: 120 (give or take 2), or a range like 90-110" spellcheck="false">
           <select id="o-key" title="Key"><option value="">Any key</option></select>

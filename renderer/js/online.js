@@ -179,6 +179,31 @@ export function createOnline(ctx) {
   });
   const passesMusic = r => (!MO.bpm || (r.bpm >= MO.bpm[0] && r.bpm <= MO.bpm[1])) && (!MO.key || r.mkey === MO.key);
 
+  // Length filter: the same presets and custom range as the library's. Results with no known length are hidden while it's on.
+  const OD = { range: null }; // [min, max] in seconds (this session)
+  const durSel = $('#o-dur'), durMin = $('#o-dur-min'), durMax = $('#o-dur-max');
+  durSel.innerHTML = $('#f-dur').innerHTML;
+  const setRange = (a, b) => { OD.range = a == null && b == null ? null : [a ?? 0, b ?? Infinity]; render(); };
+  function applyCustomDur() {
+    const a = ctx.parseLength(durMin.value), b = ctx.parseLength(durMax.value);
+    durMin.classList.toggle('bad', Number.isNaN(a));
+    durMax.classList.toggle('bad', Number.isNaN(b));
+    if (!Number.isNaN(a) && !Number.isNaN(b)) setRange(a, b);
+  }
+  durSel.addEventListener('change', () => {
+    const v = durSel.value, custom = v === 'custom';
+    $('#o-dur-custom').hidden = !custom;
+    if (custom) { applyCustomDur(); durMin.focus(); return; }
+    const [a, b] = v.split('-');
+    setRange(v ? Number(a) : null, v && b !== '' ? Number(b) : null);
+  });
+  let durTimer = 0;
+  for (const el of [durMin, durMax]) {
+    el.addEventListener('input', () => { clearTimeout(durTimer); durTimer = setTimeout(applyCustomDur, 250); });
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(durTimer); applyCustomDur(); el.blur(); } });
+  }
+  const passesDur = r => !OD.range || (r.duration > 0 && r.duration >= OD.range[0] && r.duration <= OD.range[1]);
+
   // ---------------------------------------------------------------- Soundfield search / Website search
   const web = () => prefs.onlineMode === 'web';
   function setOMode(m) {
@@ -288,7 +313,8 @@ export function createOnline(ctx) {
   const anyMore = () => Object.values(O.more).some(Boolean);
 
   function sorted() {
-    const list = music() && (MO.bpm || MO.key) ? O.results.filter(passesMusic) : O.results;
+    const musicOn = music() && (MO.bpm || MO.key);
+    const list = musicOn || OD.range ? O.results.filter(r => (!musicOn || passesMusic(r)) && passesDur(r)) : O.results;
     if (!O.sort) return list.slice();
     const { key, dir } = O.sort;
     return list.slice().sort((a, b) => {
@@ -732,6 +758,8 @@ export function createOnline(ctx) {
     openAccount: which => (which === 'freesound' ? settingsDialog() : which === 'teamsfx' ? teamDialog() : epidemicDialog()),
     teamDialog,
     destLabel,
+    // For tools/test-eval.js: show these results without searching, and read what's listed.
+    testResults(rs) { O.results = rs; O.more = {}; render(); return O.view.map(r => r.key); },
     key,
     refresh() { list.refresh(); },
     progress(p) {

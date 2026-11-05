@@ -520,7 +520,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 #online:not(.music) :is(.c-key, .c-bpm) { display: none; }
 #o-music-filters input { width: 74px; }
 .dd-menu label.off { opacity: .45; } /* sound effects only: skipped by Music searches */
-#app.web-search #o-kinds, #app.web-search #o-music-filters { display: none; }
+#app.web-search #o-kinds, #app.web-search #o-music-filters, #app.web-search #o-dur, #app.web-search #o-dur-custom { display: none; }
+#o-dur-custom input { width: 64px; }
 #o-modes { flex: none; display: flex; align-items: center; gap: 12px; padding: 7px 14px; border-bottom: 1px solid var(--line); background: var(--panel); font-size: 12px; color: var(--dim); }
 .seg { display: flex; flex: none; padding: 2px; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 .seg button { height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; }

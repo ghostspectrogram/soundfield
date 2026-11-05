@@ -360,6 +360,20 @@
   await pending;
   check('Asks before downloading a huge preview', /2\.8 GB/.test(q) && sf.wave.message.includes('not downloaded'), q.slice(0, 60));
 
+  // Online length filter: presets and a custom range; unknown lengths are hidden while it's on.
+  const ores = [['a', 0.5], ['b', 5], ['c', 90], ['d', 0]].map(([k, d]) => ({ key: `test:${k}`, source: 'archive', sourceLabel: 'Test', title: k, license: 'cc0', duration: d }));
+  const oSel = document.querySelector('#o-dur'), pick = v => { oSel.value = v; oSel.dispatchEvent(new Event('change')); };
+  const all = sf.onlineUI.testResults(ores).join();
+  pick('1-10');
+  const preset = sf.onlineUI.testResults(ores).join();
+  pick('custom');
+  document.querySelector('#o-dur-min').value = '1:00';
+  document.querySelector('#o-dur-min').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+  const custom = sf.onlineUI.testResults(ores).join();
+  pick('');
+  const back = sf.onlineUI.testResults([]).length;
+  check('Online: filter by length', all === 'test:a,test:b,test:c,test:d' && preset === 'test:b' && custom === 'test:c' && back === 0, `${preset} | ${custom}`);
+
   await D({ open: CFG.driveRoot, box: [] });
   const added = await window.api.addLibraries();
   log = await D({ open: null });
